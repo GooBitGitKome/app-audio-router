@@ -42,18 +42,27 @@
 
 ### 3.1 エフェメラル仮想マイク管理 (Ephemeral Virtual Microphone)
 - **デバイス名**: `AppAudioRouter Virtual Microphone`
+- **デバイスUID**: `com.appaudiorouter.virtualmic.default`（決定論的固定UID。アプリ再起動時にもUIDが不変に保たれ、BraveやChrome等のWebRTCブラウザがデバイストークンを見失って物理マイクへサイレントフォールバックするのを防止）
 - **ライフサイクル**:
-  - アプリケーション起動時に、システム内に存在する利用可能なループバックエンジン（BlackHole 優先、次いで ZoomAudioDevice 等）を検出し、それを内包するプライベート Aggregate Input Device を動的に生成。
+  - アプリケーション起動時に、システム内に存在する利用可能なループバックエンジン（BlackHole 優先、次いで ZoomAudioDevice 等）を検出し、それを内包する Aggregate Input Device を動的に生成。
   - OS のオーディオデバイス一覧に正式な入力マイクとして登録され、Chrome, Brave, Zoom, Teams 等のブラウザやアプリから選択可能となる。
   - アプリケーション終了（`NSApplication.terminate` / `deinit`）時に、生成した Aggregate Device を CoreAudio HAL から完全に破棄・削除。OS 上に不要な仮想ドライバを残さない。
-- **UI 表示フィルタ**:
+  - 起動時と手動セットアップで同じソースのデバイスが既に存在する場合は再利用する。作成時に macOS の標準入力デバイスは自動変更しない。
+- **UI 表示フィルタ・ブラウザ互換性**:
   - ユーザー混乱を防ぐため、内部サブデバイスとして利用している第三者ドライバ（ZoomAudioDevice, BlackHole 等）は、Master Output / Master Input のセレクタから自動的に除外・非表示化。
+  - Chromium系ブラウザ（Brave, Google Chrome）における CoreAudio AUHAL の集約デバイス認識制限に配慮し、ブラウザ側で集約デバイスが表示されない環境では直接ループバックサブデバイス（`BlackHole 2ch`）を指定して同等機能が得られる設計を担保。
 
 ### 3.2 デスクトップ音声の仮想マイクルーティング (Desktop Audio to Mic)
 - **キャプチャ機構**: `CATapDescription(stereoGlobalTapButExcludeProcesses:)` によるグローバルタップ。
+- **ブラウザ音声入力の用途**: YouTube 等の再生音をブラウザ上の音声入力へ渡す。アプリはデスクトップ音声を Process Tap で取得し、双方向の入出力を持つループバックデバイスの出力へ送出する。ブラウザ側ではループバックデバイス（BlackHole の場合は `BlackHole 2ch`）をマイクとして選ぶ。Aggregate Input Device がブラウザに表示される場合は `AppAudioRouter Virtual Microphone` も利用できる。
+- **起動条件と状態表示**: ループバックデバイスに有効な出力チャンネルがあり、タップと出力レンダラーの開始に成功した場合に限りルーティングを有効状態とする。起動に失敗した場合は UI を有効表示にしない。
 - **フィードバックループ防止機構 (Self-Exclusion)**:
   - 自プロセス（`AppAudioRouter`）の `AudioObjectID` を自動取得し、グローバルタップの除外リストに常時追加。
   - アプリが仮想マイクへレンダリングした音声や、テスト再生音が再度キャプチャされて増幅・発散する正のフィードバックループ（音割れ・強烈な矩形波ノイズ）を完全に防止。
+- **アプリ単位の除外**:
+  - UI で選択したアプリの Bundle ID を保存し、タップ開始時に一致する CoreAudio プロセス（Chromium helper を含む）を除外する。
+  - 除外設定変更時は稼働中のタップを再作成する。CoreAudio プロセスIDがまだ存在しないアプリは未解決として表示し、タップから除外できない。
+  - YouTube と Gemini Live の音声を別々に扱う場合は、YouTube を Safari、Gemini Live を Chrome で再生し、Chrome を除外する構成を案内する。
 - **サンプリングレート同期**:
   - タップのアグリゲートデバイス（`TapAggregateDevice`）生成時に、公称サンプリングレート（`kAudioDevicePropertyNominalSampleRate`）を出力先デバイス（48,000Hz）と一致させ、CoreAudio HAL 内で同期リサンプリング。バッファアンダーランによる音飛びやピッチの狂いを排除。
 - **音量・ミュート制御**:
@@ -119,7 +128,9 @@
 
 1. **ループバックエンジンの依存**:
    macOS はカーネルレベルのカスタム AudioServerPlugIn なしには、純粋なソフトウェア入力デバイスを単独作成できません。そのため、内部サブデバイスとして既存の仮想オーディオドライバ（BlackHole, ZoomAudioDevice 等）が 1 つ以上インストールされている必要があります。
-2. **macOS 14.1 以前の非対応**:
+2. **ブラウザ側のデバイス列挙**:
+   ブラウザや WebRTC サイトが Aggregate Input Device を列挙しない環境があります。その場合、ブラウザの入力デバイス選択肢に表示されるループバックデバイスを選ぶ方法があります。ブラウザごとの列挙動作は [UNKNOWN] であり、実機環境で確認が必要です。
+3. **macOS 14.1 以前の非対応**:
    `CATapDescription` のプロセス除外付きグローバルタップ API は macOS 14.2 以降に限定されています。
-3. **アプリケーション個別音量一覧機能の非表示**:
+4. **アプリケーション個別音量一覧機能の非表示**:
    過去の仕様ではアプリケーション個別音量リスト（`ProcessRowView`）が存在していましたが、ユーザーの要望によりメニューバー UI からは削除されています（内部 Core ロジックは残存）。

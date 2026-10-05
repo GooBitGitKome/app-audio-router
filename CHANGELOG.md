@@ -9,12 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Standard repository documentation suite (`docs/specification.md`, `docs/architecture.md`, `docs/installation.md`, `docs/usage.md`, `docs/development.md`, `docs/versioning.md`, `docs/release-process.md`, `docs/roadmap.md`).
-- AI agent collaboration guidelines (`AGENTS.md`, `AI_USAGE.md`).
-- Contribution guidelines and templates (`CONTRIBUTING.md`, GitHub issue/PR templates).
+### Fixed
+- Desktop-to-microphone routing now stays off when tap/device startup fails, and loopback selection requires a non-aggregate virtual device with both input and output channels.
+- Replacing an active desktop tap detaches its old renderer buffer before starting the new route.
+- Virtual microphone setup reuses the existing deterministic-UID device when its loopback source is unchanged, and the second launch-time setup call has been removed.
+- Desktop capture can exclude selected apps (including Chromium helper processes) by bundle identifier, with exclusions persisted and applied immediately to an active route.
+
+### Documentation
+- Made `BlackHole 2ch` the recommended Gemini/Chromium microphone because the browser may not enumerate the app-created Aggregate Input Device; documented how to verify input in the browser.
+- Documented Safari YouTube + Chrome Gemini Live routing and separate Brave virtual-mic / GeForce NOW physical-mic selection.
 
 ---
+
+## [1.0.1] - 2026-10-05
+
+### Fixed
+- **Persistent Virtual Microphone UID (`com.appaudiorouter.virtualmic.default`)**: Resolved an issue where random UUID generation for ephemeral aggregate devices caused Chromium-based browsers (Brave, Chrome) to lose device bindings upon relaunch, resulting in silent fallback to physical microphones (Bluetooth/USB).
+- **Default Master Input Override Protection**: Changed the default state of `setAsDefaultInputUponCreation` in the UI to `false` to avoid unintentional hijacking of the system default input device.
+- **Aggregate Device Cleanup by UID**: Added `destroyDeviceByUID(_:)` to `AggregateDeviceManager` to safely purge previous aggregate devices with matching static UIDs before re-creating the virtual microphone.
+
+### Added
+- **Automated Desktop Audio Pipeline CLI Test (`test-desktop`)**: Added `swift run AppAudioRouterCLI test-desktop` command to verify end-to-end routing of desktop audio (playing system sound, captured by ProcessTap, routed through loopback driver, and recorded from virtual mic input).
+- **Chromium / Brave Direct Loopback Guidance**: Added UI hints and documentation for Brave and Chrome users noting that selecting the direct loopback sub-device (`BlackHole 2ch`) bypasses Chromium's CoreAudio AUHAL aggregate device enumeration limitations.
+- **Unit Test for Persistent Virtual Mic UID**: Added `testVirtualMicrophonePersistentUID` to verify deterministic UID assignment.
 
 ## [1.0.0] - 2026-10-01
 

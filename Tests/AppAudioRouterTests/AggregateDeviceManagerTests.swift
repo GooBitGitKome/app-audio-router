@@ -65,4 +65,31 @@ final class AggregateDeviceManagerTests: XCTestCase {
         source.stop()
         XCTAssertFalse(source.isRunning)
     }
+
+    func testVirtualMicrophonePersistentUID() {
+        XCTAssertEqual(AggregateDeviceManager.virtualMicUID, "com.appaudiorouter.virtualmic.default")
+        XCTAssertEqual(AggregateDeviceManager.virtualMicDeviceName, "AppAudioRouter Virtual Microphone")
+    }
+
+    func testVirtualMicrophoneCreationIsIdempotent() {
+        let manager = AggregateDeviceManager.shared
+        let source = AudioDeviceManager.shared.getAllDevices().first {
+            $0.isInput && $0.isOutput && !$0.isAggregate &&
+            ($0.uid.lowercased().contains("blackhole") || $0.uid.contains("zoom.us.zoomaudiodevice"))
+        }
+        guard let source else {
+            print("No bidirectional loopback device available for virtual microphone test")
+            return
+        }
+
+        let originalDefaultInput = AudioDeviceManager.shared.getDefaultInputDevice()?.id
+        let firstID = manager.createVirtualMicrophone(subDeviceUID: source.uid)
+        let secondID = manager.createVirtualMicrophone(subDeviceUID: source.uid)
+        defer { manager.destroyVirtualMicrophone() }
+
+        XCTAssertNotNil(firstID)
+        XCTAssertEqual(secondID, firstID, "Repeated setup should reuse the same aggregate device")
+        XCTAssertEqual(AudioDeviceManager.shared.getDefaultInputDevice()?.id, originalDefaultInput,
+                       "Creating the virtual microphone must not change macOS default input")
+    }
 }

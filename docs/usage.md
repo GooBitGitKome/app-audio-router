@@ -74,12 +74,21 @@ Mac 上で鳴っているすべての音（YouTube, BGM, ゲーム音, 効果音
 ## 3. Web会議・ブラウザとの連携設定
 
 ### 3.1 Brave / Google Chrome で利用する場合
-1. AppAudioRouter を起動し、「Desktop Audio to Virtual Mic」を ON にします。
-2. ブラウザの設定メニュー（または Google Meet 等の通話画面の設定）を開きます。
-3. **マイク設定** で **`AppAudioRouter Virtual Microphone`** を選択します。
-4. これにより、Mac で再生している音声をブラウザの音声入力として認識させることができます。
+1. AppAudioRouter を起動し、YouTube 等の再生を始めて「Desktop Audio to Virtual Mic」のレベルメーターが反応することを確認します。
+2. ブラウザのサイト設定でマイク利用を許可し、Gemini の音声入力または通話画面のマイク設定を開きます。
+3. **マイク入力** で **`BlackHole 2ch`** を選択します。AppAudioRouter はデスクトップ音声をこのデバイスの出力へ送り、BlackHole の入力を Gemini のマイクとして使います。
+4. `BlackHole 2ch` が表示されない場合は、ブラウザを再起動して再確認してください。`AppAudioRouter Virtual Microphone` が表示される場合はそれも選択できますが、ブラウザによっては Aggregate Input Device を列挙できないことがあります。
+5. ブラウザの入力レベル表示で音声を確認してください。アプリのデスクトップメーターはタップで音を取得したことを示しますが、ブラウザがその入力デバイスを使っていることまでは示しません。メーターが動かない場合は macOS の「プライバシーとセキュリティ」>「画面収録とシステムオーディオ収録」で AppAudioRouter の許可を確認し、アプリを再起動してください。
 
-### 3.2 Zoom で利用する場合
+> YouTube と Gemini Live を同じブラウザで再生すると、どちらの音も同じタップ対象になります。YouTube を Safari、Gemini Live を Chrome に分け、除外一覧で Chrome を選ぶと、YouTube の音声を送りつつ Gemini の返答を取り込まない設定にできます。Chrome の Go Live 入力には BlackHole 2ch を選びます。
+
+### 3.2 Brave と GeForce NOW で別々のマイクを使う
+1. AppAudioRouter で **Desktop Audio to Virtual Mic** を OFF にしている場合でも、`AppAudioRouter Virtual Microphone` は物理マイクを含まない仮想入力として選択できます。デスクトップ音声を Brave に渡す場合はルーティングを ON にします。
+2. Brave のサイトまたはブラウザのマイク選択で **`AppAudioRouter Virtual Microphone`** を明示的に選択し、**Automatically** は選ばないでください。アプリは macOS の標準入力を変更しません。
+3. GeForce NOW の macOS アプリの音声設定では、利用する **物理マイク** を明示的に選択します。
+4. これにより Brave は AppAudioRouter の仮想入力、GeForce NOW は物理入力を個別に使います。macOS のアプリ別マイク選択と Brave のサイト権限画面は OS / ブラウザ版により表示が異なる場合があります。
+
+### 3.3 Zoom で利用する場合
 1. Zoom の「設定」>「オーディオ」を開きます。
 2. **マイク** のプルダウンから **`AppAudioRouter Virtual Microphone`** を選択します。
 3. （推奨）「オリジナルサウンドを有効にする」を ON に設定すると、Zoom 側の強力なノイズキャンセリングによって音楽やデスクトップ音が遮断されるのを防ぐことができます。

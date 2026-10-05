@@ -12,7 +12,7 @@ public struct MenuBarContentView: View {
     @State private var showingMultiMicSheet = false
     @State private var multiMicName = "Combined Microphones"
     @State private var selectedDeviceUIDsForMultiMic: Set<String> = []
-    @State private var setAsDefaultInputUponCreation = true
+    @State private var setAsDefaultInputUponCreation = false
 
     public init() {}
 
@@ -355,9 +355,53 @@ public struct MenuBarContentView: View {
                 Image(systemName: "info.circle")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
-                Text("In Brave Browser: Go to Settings > Privacy & security > Site settings > Microphone, and select 'AppAudioRouter Virtual Microphone'.")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("For Gemini Live in Chrome, play YouTube in Safari and select BlackHole 2ch as Chrome's microphone. Exclude Chrome below to prevent Gemini's reply audio feeding back.")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                    Text("For separate apps, set Brave's microphone to AppAudioRouter Virtual Microphone and GeForce NOW to your physical microphone. Avoid Automatically in Brave.")
+                        .font(.system(size: 8))
+                        .foregroundColor(.secondary.opacity(0.85))
+                }
+            }
+
+            DisclosureGroup("Exclude apps from desktop capture") {
+                if state.desktopAudioExclusionCandidates.isEmpty {
+                    Text("No running apps found. Refresh after opening the app you want to exclude.")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                } else {
+                    ForEach(state.desktopAudioExclusionCandidates) { process in
+                        if let bundleID = process.bundleIdentifier {
+                            Toggle(isOn: Binding(
+                                get: { state.excludedDesktopAudioBundleIDs.contains(bundleID) },
+                                set: { state.setDesktopAudioExcluded(bundleIdentifier: bundleID, excluded: $0) }
+                            )) {
+                                HStack(spacing: 5) {
+                                    Text(process.name).font(.system(size: 10))
+                                    if process.isAudioActive {
+                                        Text("AUDIO")
+                                            .font(.system(size: 7, weight: .bold))
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                    if !state.excludedDesktopAudioBundleIDs.isEmpty {
+                        Text("Excluded apps need active audio when routing starts. Refresh and restart routing if an app starts audio later.")
+                            .font(.system(size: 8))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .font(.system(size: 9, weight: .medium))
+
+            if !state.unresolvedDesktopTapExcludedBundleIDs.isEmpty {
+                Text("Some selected apps have no active audio process yet. Start their audio, refresh, then turn routing off and on.")
+                    .font(.system(size: 8))
+                    .foregroundColor(.orange)
             }
         }
         .padding(8)

@@ -63,7 +63,7 @@ graph TD
 sequenceDiagram
     autonumber
     participant System as macOS System Audio
-    participant Tap as CoreAudio ProcessTap<br>(Exclude AppAudioRouter)
+    participant Tap as CoreAudio ProcessTap<br>(Exclude AppAudioRouter + selected apps)
     participant Agg as TapAggregateDevice<br>(Resampled to 48kHz)
     participant Engine as AudioRoutingEngine
     participant Ring as AudioRingBuffer
@@ -90,12 +90,20 @@ sequenceDiagram
   1. `ProcessTap.getProcessObjectIDs()` により、自プロセス（`getpid()`）に割り当てられた `AudioObjectID` を CoreAudio HAL から動的に検索。
   2. グローバルタップ作成時にこの ID を必ず除外リストに含める。
   3. これにより、仮想マイクへ出力した音声が再キャプチャされるループを物理的に遮断し、発散・歪みノイズを 100% 防止。
+- **アプリ別除外**: `AppState` は Bundle ID の選択を UserDefaults に保存する。タップ開始時に `AudioProcessManager` の CoreAudio プロセス一覧から該当アプリと helper の `AudioObjectID` を集め、自己除外IDと一緒に `ProcessTap.createGlobalTap(excludeProcesses:)` へ渡す。選択変更時に稼働中のタップを再作成する。対象のプロセスIDが未生成の場合、除外は未解決として UI に示す。
 
 ### 3.3 サンプリングレート同期の設計
 - **課題**: デフォルトのデスクトップタップは 44.1kHz で動作する場合がある一方、仮想マイク/ループバックドライバは通常 48.0kHz で動作する。非同期のままバッファに書き込むと、リーダーが速く消費してリングバッファがアンダーランし、音飛びやピッチの上昇（約8.8%）を招く。
 - **解決策**:
   - `TapAggregateDevice` の生成直後に、HAL プロパティ `kAudioDevicePropertyNominalSampleRate` を出力先レート（48,000Hz）に明示的に設定。
   - CoreAudio の Aggregate サブシステムにネイティブな高品質リサンプリングを行わせることで、バッファの完全同期を実現。
+
+### 3.4 永続的デバイスUIDとWebRTCサイレントフォールバック防止の設計
+- **課題**: 仮想マイクの集約デバイス生成時にランダムなUUIDを使用すると、アプリ再起動やデバイス再作成のたびにCoreAudio上のUIDが変化する。BraveやChrome等のChromiumベースブラウザ（WebRTC）は、保存したデバイストークン（UIDハッシュ）が消失するとエラーを出さずにOSの「既定の入力デバイス（BluetoothやUSBマイク）」へサイレントフォールバック（自動再接続）してしまい、UIの表記と実際のキャプチャ先が乖離する障害を引き起こしていた。
+- **解決策**:
+  - `AggregateDeviceManager.virtualMicUID`（`com.appaudiorouter.virtualmic.default`）を導入し、決定論的な固定UIDで集約デバイスを生成。
+  - 同じUIDと同じループバックサブデバイスを持つ既存 Aggregate Input Device は再利用する。それ以外の古い同名または同UIDデバイスを破棄して作り直す。
+  - ChromiumのAUHAL層が集約デバイスの入力を拒否する環境向けに、基底ループバックドライバ（`BlackHole 2ch`）への直接接続パスを案内。
 
 ---
 

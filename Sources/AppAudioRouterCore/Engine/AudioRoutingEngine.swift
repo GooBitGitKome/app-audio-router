@@ -60,6 +60,8 @@ public final class AudioRoutingEngine: @unchecked Sendable {
     private var desktopMicRingBuffer: AudioRingBuffer?
     public private(set) var isDesktopAudioToMicEnabled: Bool = false
     public private(set) var activeVirtualMicUID: String?
+    public private(set) var desktopTapExcludedBundleIDs: Set<String> = []
+    public private(set) var unresolvedDesktopTapExcludedBundleIDs: Set<String> = []
 
     private var _desktopVolume: Float = 1.0
     private var _isDesktopMuted: Bool = false
@@ -82,10 +84,11 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         // Auto-detect a working virtual mic device (like BlackHole or ZoomAudioDevice) if available
         let virtualDevs = AudioDeviceManager.shared.getVirtualDevices()
         let preferred = virtualDevs.first { dev in
-            (dev.uid.lowercased().contains("blackhole") && !dev.uid.contains("VirtualDesktop")) || dev.uid.contains("zoom.us.zoomaudiodevice")
+            dev.isInput && dev.isOutput && !dev.isAggregate &&
+            ((dev.uid.lowercased().contains("blackhole") && !dev.uid.contains("VirtualDesktop")) || dev.uid.contains("zoom.us.zoomaudiodevice"))
         } ?? virtualDevs.first { dev in
-            dev.inputChannelCount > 0 && dev.outputChannelCount > 0 && !dev.uid.contains("VirtualDesktop")
-        } ?? virtualDevs.first
+            dev.isInput && dev.isOutput && !dev.isAggregate && !dev.uid.contains("VirtualDesktop")
+        }
         self.activeVirtualMicUID = preferred?.uid
     }
 
@@ -278,6 +281,25 @@ public final class AudioRoutingEngine: @unchecked Sendable {
 
     // MARK: - Desktop Audio to Mic
 
+    /// Sets app-level global tap exclusions. Active routes are restarted so the new exclusion
+    /// list takes effect immediately; the tap still always excludes AppAudioRouter itself.
+    public func setDesktopTapExcludedBundleIDs(_ bundleIDs: Set<String>) {
+        lock.lock()
+        guard bundleIDs != desktopTapExcludedBundleIDs else {
+            lock.unlock()
+            return
+        }
+        desktopTapExcludedBundleIDs = bundleIDs
+        let shouldRestart = isDesktopAudioToMicEnabled
+        let targetUID = activeVirtualMicUID
+        lock.unlock()
+
+        if shouldRestart {
+            setDesktopAudioToMic(enabled: false)
+            setDesktopAudioToMic(enabled: true, virtualMicDeviceUID: targetUID)
+        }
+    }
+
     public func setDesktopAudioToMic(enabled: Bool, virtualMicDeviceUID: String? = nil) {
         if let uid = virtualMicDeviceUID {
             setActiveVirtualMicUID(uid)
@@ -300,20 +322,48 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             return
         }
 
+        // A failed restart must not leave the engine reporting an old active route.
+        isDesktopAudioToMicEnabled = false
+
         guard let targetUID = activeVirtualMicUID,
-              let targetDevice = AudioDeviceManager.shared.findDevice(byUID: targetUID) else {
+              let targetDevice = AudioDeviceManager.shared.findDevice(byUID: targetUID),
+              targetDevice.isOutput else {
             return
         }
 
         // Clean up any existing desktop tap first
         if desktopTapID != 0 {
+            if let targetUID = activeVirtualMicUID {
+                getOrCreateRenderer(deviceUID: targetUID)?.removeSourceBuffer(
+                    id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+                )
+            }
             desktopAggregate?.stop()
             desktopAggregate?.destroy()
             AudioHardwareDestroyProcessTap(desktopTapID)
             desktopTapID = 0
+            desktopAggregate = nil
+            desktopMicRingBuffer = nil
         }
 
-        guard let (tapID, tapUID) = ProcessTap.createGlobalTap() else {
+        lock.lock()
+        let excludedBundleIDs = desktopTapExcludedBundleIDs
+        lock.unlock()
+        let processes = AudioProcessManager.shared.refreshProcesses()
+        let excludedProcessIDs = ProcessTap.processObjectIDs(
+            forBundleIdentifiers: excludedBundleIDs,
+            processes: processes
+        )
+        let resolvedBundleIDs = Set(processes.compactMap { process -> String? in
+            guard let bundleID = process.bundleIdentifier,
+                  !process.objectIDs.isEmpty,
+                  excludedBundleIDs.contains(where: { bundleID == $0 || bundleID.hasPrefix($0 + ".") }) else { return nil }
+            return excludedBundleIDs.first(where: { bundleID == $0 || bundleID.hasPrefix($0 + ".") })
+        })
+        lock.lock()
+        unresolvedDesktopTapExcludedBundleIDs = excludedBundleIDs.subtracting(resolvedBundleIDs)
+        lock.unlock()
+        guard let (tapID, tapUID) = ProcessTap.createGlobalTap(excludeProcesses: excludedProcessIDs) else {
             return
         }
 
@@ -330,8 +380,18 @@ public final class AudioRoutingEngine: @unchecked Sendable {
 
         let ring = AudioRingBuffer()
         let rendererUUID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        let renderer = getOrCreateRenderer(deviceUID: targetDevice.uid)
-        renderer?.addSourceBuffer(id: rendererUUID, buffer: ring)
+        guard let renderer = getOrCreateRenderer(deviceUID: targetDevice.uid) else {
+            aggregate.destroy()
+            AudioHardwareDestroyProcessTap(tapID)
+            return
+        }
+        renderer.addSourceBuffer(id: rendererUUID, buffer: ring)
+        guard renderer.isRunning else {
+            renderer.removeSourceBuffer(id: rendererUUID)
+            aggregate.destroy()
+            AudioHardwareDestroyProcessTap(tapID)
+            return
+        }
 
         aggregate.onAudioBuffer = { [weak self] bufferList in
             guard let self = self else { return }
@@ -395,7 +455,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         guard aggregate.start() else {
             aggregate.destroy()
             AudioHardwareDestroyProcessTap(tapID)
-            renderer?.removeSourceBuffer(id: rendererUUID)
+            renderer.removeSourceBuffer(id: rendererUUID)
             return
         }
 

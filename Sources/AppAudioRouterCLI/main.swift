@@ -32,6 +32,8 @@ struct AppAudioRouterCLI {
             await runVirtualInputTest(args: Array(args.dropFirst(2)))
         case "test-tone":
             await runToneTest()
+        case "test-desktop":
+            await runDesktopAudioTest()
         case "diagnose":
             await runDiagnose()
         default:
@@ -53,6 +55,8 @@ struct AppAudioRouterCLI {
           app-audio-router setup-virtual-mic [--set-default] Setup 'AppAudioRouter Virtual Microphone'
           app-audio-router cleanup-virtual-mic      Destroy 'AppAudioRouter Virtual Microphone'
           app-audio-router test-virtual-mic [sec]   Record & playback test from Virtual Microphone
+          app-audio-router test-tone                Verify 440Hz tone pipeline to Virtual Microphone
+          app-audio-router test-desktop             Verify system desktop audio tap to Virtual Microphone
           app-audio-router diagnose                 Diagnose audio engine and virtual mic pipeline
         """)
     }
@@ -169,7 +173,7 @@ struct AppAudioRouterCLI {
         }
 
         let micName = AggregateDeviceManager.virtualMicDeviceName
-        if let existing = allDevs.first(where: { $0.isInput && ($0.name == micName || $0.name == "Desktop Input Microphone") }) {
+        if let existing = allDevs.first(where: { $0.isInput && ($0.name == micName || $0.name == "Desktop Input Microphone" || $0.uid == AggregateDeviceManager.virtualMicUID) }) {
             let subs = AggregateDeviceManager.shared.getSubDeviceUIDs(for: existing.id)
             if subs.contains(loopback.uid) && existing.name == micName {
                 print("\(micName) already active (ID: \(existing.id)).")
@@ -215,7 +219,7 @@ struct AppAudioRouterCLI {
 
         // Check AppAudioRouter Virtual Microphone
         let micName = AggregateDeviceManager.virtualMicDeviceName
-        let virtualMic = allDevs.first(where: { $0.name == micName || $0.name == "Desktop Input Microphone" })
+        let virtualMic = allDevs.first(where: { $0.name == micName || $0.name == "Desktop Input Microphone" || $0.uid == AggregateDeviceManager.virtualMicUID })
         if let mic = virtualMic {
             print("\(mic.name) found: (ID: \(mic.id), UID: \(mic.uid))")
             print("  Channels: In=\(mic.inputChannelCount), Out=\(mic.outputChannelCount), Rate: \(mic.sampleRate)Hz")
@@ -588,5 +592,86 @@ struct AppAudioRouterCLI {
             }
             print("=========================")
         }
+    }
+
+    static func runDesktopAudioTest() async {
+        print("=== Desktop Audio to Virtual Mic Test ===")
+        let allDevs = AudioDeviceManager.shared.refreshDevices()
+        guard let loopback = allDevs.first(where: {
+            ($0.uid.lowercased().contains("blackhole") && !$0.uid.contains("VirtualDesktop")) ||
+            $0.uid.contains("zoom.us.zoomaudiodevice")
+        }) else {
+            print("ERROR: Loopback device not found.")
+            return
+        }
+
+        // Ensure virtual mic exists
+        _ = AggregateDeviceManager.shared.createVirtualMicrophone(subDeviceUID: loopback.uid)
+
+        print("1. Enabling Desktop Audio to Virtual Mic via AudioRoutingEngine...")
+        AudioRoutingEngine.shared.desktopVolume = 1.0
+        AudioRoutingEngine.shared.isDesktopMuted = false
+        AudioRoutingEngine.shared.setDesktopAudioToMic(enabled: true, virtualMicDeviceUID: loopback.uid)
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        print("2. Starting 3.0s recording from Virtual Microphone...")
+        let started = VirtualInputTester.shared.startRecording(duration: 3.0, autoPlayWhenDone: false)
+        guard started else {
+            print("ERROR: Failed to start recording.")
+            AudioRoutingEngine.shared.setDesktopAudioToMic(enabled: false)
+            return
+        }
+
+        // Play system sound in background
+        print("3. Playing system desktop sound (/System/Library/Sounds/Ping.aiff)...")
+        let soundProcess = Process()
+        soundProcess.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
+        soundProcess.arguments = ["/System/Library/Sounds/Ping.aiff"]
+        try? soundProcess.run()
+
+        // Wait for recording to complete (3.2s)
+        try? await Task.sleep(nanoseconds: 3_200_000_000)
+        VirtualInputTester.shared.stopRecording(autoPlay: false)
+        AudioRoutingEngine.shared.setDesktopAudioToMic(enabled: false)
+
+        print("4. Analyzing captured audio from Virtual Microphone...")
+        let path = "\(FileManager.default.temporaryDirectory.path)/virtual_input_test.wav"
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)), data.count > 44 else {
+            print("ERROR: WAV file was not created or empty.")
+            return
+        }
+
+        let int16Data = data.subdata(in: 44..<data.count)
+        let count = int16Data.count / 2
+        var maxVal: Int16 = 0
+        var nonZeroCount = 0
+        var rmsSum: Double = 0
+
+        int16Data.withUnsafeBytes { ptr in
+            let s = ptr.bindMemory(to: Int16.self)
+            for i in 0..<count {
+                let val = abs(s[i])
+                if val > maxVal { maxVal = val }
+                if val > 100 { nonZeroCount += 1 }
+                rmsSum += Double(s[i]) * Double(s[i])
+            }
+        }
+
+        let duration = Double(count) / (48000.0 * 2.0)
+        let rms = sqrt(rmsSum / Double(count))
+
+        print("\n=== DESKTOP AUDIO TEST RESULTS ===")
+        print(String(format: "  Captured Duration: %.2fs", duration))
+        print(String(format: "  Max Peak Sample: %d / 32767 (%.1f%% of full scale)", maxVal, Float(maxVal) / 32767.0 * 100.0))
+        print(String(format: "  RMS Level: %.1f (%.1f dBFS)", rms, 20.0 * log10(max(1.0, rms) / 32767.0)))
+        print("  Non-zero Audio Samples: \(nonZeroCount) / \(count)")
+
+        if maxVal > 1000 && nonZeroCount > 500 {
+            print("  STATUS: PASSED! Desktop audio successfully captured and received through Virtual Mic.")
+        } else {
+            print("  STATUS: FAILED or SILENT! Virtual Mic received near-zero audio.")
+        }
+        print("==================================")
     }
 }

@@ -171,4 +171,20 @@ public final class ProcessTap: @unchecked Sendable {
             return nil
         }
     }
+
+    /// Resolves app-level exclusions to the CoreAudio process objects currently owned by those apps.
+    /// Bundle identifier prefix matching includes Chromium helper processes while preserving app-level UI.
+    public static func processObjectIDs(
+        forBundleIdentifiers bundleIdentifiers: Set<String>,
+        processes: [AudioProcess]
+    ) -> [AudioObjectID] {
+        let ids = processes.compactMap { process -> [AudioObjectID]? in
+            guard let bundleID = process.bundleIdentifier,
+                  bundleIdentifiers.contains(where: { bundleID == $0 || bundleID.hasPrefix($0 + ".") }) else {
+                return nil
+            }
+            return process.objectIDs
+        }.flatMap { $0 }
+        return Array(Set(ids)).sorted()
+    }
 }

@@ -11,6 +11,21 @@ public final class AppState: @unchecked Sendable {
     public var devices: [AudioDevice] = []
     public var processes: [AudioProcess] = []
     public var showAllProcesses: Bool = false
+    public private(set) var excludedDesktopAudioBundleIDs: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: "desktopTapExcludedBundleIDs") ?? []
+    )
+
+    public var desktopAudioExclusionCandidates: [AudioProcess] {
+        var seen = Set<String>()
+        return processes.filter { process in
+            guard let bundleID = process.bundleIdentifier,
+                  !bundleID.isEmpty,
+                  !process.isSystemDaemon,
+                  process.pid != ProcessInfo.processInfo.processIdentifier,
+                  seen.insert(bundleID).inserted else { return false }
+            return true
+        }
+    }
 
     public var defaultOutputDevice: AudioDevice? {
         devices.first { $0.isDefaultOutput }
@@ -84,6 +99,7 @@ public final class AppState: @unchecked Sendable {
     public var desktopVolume: Float = 1.0
     public var isDesktopMuted: Bool = false
     public var isDesktopMeterEnabled: Bool = true
+    public var unresolvedDesktopTapExcludedBundleIDs: Set<String> = []
 
     // Virtual Input Test State
     public var testState: VirtualInputTester.TestState = .idle
@@ -106,7 +122,7 @@ public final class AppState: @unchecked Sendable {
         refresh()
         setupListeners()
         setupPolling()
-        setupAppVirtualMicrophone()
+        routingEngine.setDesktopTapExcludedBundleIDs(excludedDesktopAudioBundleIDs)
     }
 
     deinit {
@@ -118,13 +134,15 @@ public final class AppState: @unchecked Sendable {
 
     public func refresh() {
         self.devices = deviceManager.refreshDevices()
+        self.processes = processManager.refreshProcesses()
 
         if selectedVirtualMicUID.isEmpty {
             let preferred = virtualDevices.first { dev in
-                (dev.uid.lowercased().contains("blackhole") && !dev.uid.contains("VirtualDesktop")) || dev.uid.contains("zoom.us.zoomaudiodevice")
+                dev.isInput && dev.isOutput && !dev.isAggregate &&
+                ((dev.uid.lowercased().contains("blackhole") && !dev.uid.contains("VirtualDesktop")) || dev.uid.contains("zoom.us.zoomaudiodevice"))
             } ?? virtualDevices.first { dev in
-                dev.inputChannelCount > 0 && dev.outputChannelCount > 0 && !dev.uid.contains("VirtualDesktop")
-            } ?? virtualDevices.first
+                dev.isInput && dev.isOutput && !dev.isAggregate && !dev.uid.contains("VirtualDesktop")
+            }
             if let target = preferred {
                 selectedVirtualMicUID = target.uid
                 routingEngine.setActiveVirtualMicUID(target.uid)
@@ -288,17 +306,31 @@ public final class AppState: @unchecked Sendable {
     // MARK: - Global Routing & Virtual Microphone
 
     public func toggleDesktopToMic() {
-        isDesktopToMicEnabled.toggle()
-        if !isDesktopToMicEnabled {
-            desktopPeakLevel = 0.0
-        }
-        if isDesktopToMicEnabled && !isVirtualMicReady {
+        let shouldEnable = !isDesktopToMicEnabled
+        if shouldEnable && !isVirtualMicReady {
             _ = setupAppVirtualMicrophone(setAsDefault: false)
         }
         routingEngine.setDesktopAudioToMic(
-            enabled: isDesktopToMicEnabled,
+            enabled: shouldEnable,
             virtualMicDeviceUID: selectedVirtualMicUID.isEmpty ? nil : selectedVirtualMicUID
         )
+        isDesktopToMicEnabled = routingEngine.isDesktopAudioToMicEnabled
+        unresolvedDesktopTapExcludedBundleIDs = routingEngine.unresolvedDesktopTapExcludedBundleIDs
+        if !isDesktopToMicEnabled {
+            desktopPeakLevel = 0.0
+        }
+    }
+
+    public func setDesktopAudioExcluded(bundleIdentifier: String, excluded: Bool) {
+        if excluded {
+            excludedDesktopAudioBundleIDs.insert(bundleIdentifier)
+        } else {
+            excludedDesktopAudioBundleIDs.remove(bundleIdentifier)
+        }
+        UserDefaults.standard.set(Array(excludedDesktopAudioBundleIDs).sorted(), forKey: "desktopTapExcludedBundleIDs")
+        routingEngine.setDesktopTapExcludedBundleIDs(excludedDesktopAudioBundleIDs)
+        isDesktopToMicEnabled = routingEngine.isDesktopAudioToMicEnabled
+        unresolvedDesktopTapExcludedBundleIDs = routingEngine.unresolvedDesktopTapExcludedBundleIDs
     }
 
     public func setDesktopVolume(_ volume: Float) {
@@ -332,13 +364,12 @@ public final class AppState: @unchecked Sendable {
 
         // Locate internal loopback sub-device (BlackHole > ZoomAudioDevice > others)
         let loopback = allDevs.first { dev in
+            dev.isInput && dev.isOutput && !dev.isAggregate &&
             dev.uid.lowercased().contains("blackhole") && !dev.uid.contains("VirtualDesktop")
         } ?? allDevs.first { dev in
-            dev.uid.contains("zoom.us.zoomaudiodevice")
+            dev.isInput && dev.isOutput && !dev.isAggregate && dev.uid.contains("zoom.us.zoomaudiodevice")
         } ?? allDevs.first { dev in
-            dev.isVirtual && dev.inputChannelCount > 0 && dev.outputChannelCount > 0 && !dev.uid.contains("VirtualDesktop")
-        } ?? allDevs.first { dev in
-            dev.uid.contains("VirtualDesktop")
+            dev.isVirtual && dev.isInput && dev.isOutput && !dev.isAggregate && !dev.uid.contains("VirtualDesktop")
         }
 
         guard let target = loopback else {

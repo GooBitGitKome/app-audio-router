@@ -53,18 +53,21 @@ public final class AggregateDeviceManager: @unchecked Sendable {
     ///   - name: Human-readable device name shown in macOS.
     ///   - subDeviceUIDs: Array of microphone device UIDs to combine.
     ///   - masterUID: The clock master device UID (defaults to the first microphone).
+    ///   - deviceUID: Optional deterministic unique identifier for the aggregate device.
     ///   - isPrivate: Whether the device is private to this app or published system-wide.
     /// - Returns: The created AudioObjectID on success, or nil on failure.
     public func createAggregateInputDevice(
         name: String = "AppAudioRouter Aggregate Mic",
         subDeviceUIDs: [String],
         masterUID: String? = nil,
+        deviceUID: String? = nil,
         isPrivate: Bool = false
     ) -> AudioObjectID? {
         return createAggregateDevice(
             name: name,
             subDeviceUIDs: subDeviceUIDs,
             masterUID: masterUID,
+            deviceUID: deviceUID,
             isStacked: false,
             isPrivate: isPrivate
         )
@@ -75,6 +78,7 @@ public final class AggregateDeviceManager: @unchecked Sendable {
     ///   - name: Human-readable device name shown in macOS.
     ///   - subDeviceUIDs: Array of device UIDs to combine.
     ///   - masterUID: Clock master device UID (defaults to the first device).
+    ///   - deviceUID: Optional custom persistent UID. If nil, generates a unique UID with UUID.
     ///   - isStacked: If true, creates a Multi-Output device (outputs mirrored). If false, creates an Aggregate Device (combines channels).
     ///   - isPrivate: Whether the device is private to this app or published system-wide.
     /// - Returns: The created AudioObjectID on success, or nil on failure.
@@ -82,6 +86,7 @@ public final class AggregateDeviceManager: @unchecked Sendable {
         name: String,
         subDeviceUIDs: [String],
         masterUID: String? = nil,
+        deviceUID customUID: String? = nil,
         isStacked: Bool,
         isPrivate: Bool = false
     ) -> AudioObjectID? {
@@ -106,7 +111,12 @@ public final class AggregateDeviceManager: @unchecked Sendable {
         }
 
         let prefix = isStacked ? "multiout" : "aggregatemic"
-        let deviceUID = "com.appaudiorouter.\(prefix).\(UUID().uuidString)"
+        let deviceUID = customUID ?? "com.appaudiorouter.\(prefix).\(UUID().uuidString)"
+
+        if let custom = customUID {
+            destroyDeviceByUID(custom)
+        }
+
         let aggregateDict: [String: Any] = [
             kAudioAggregateDeviceNameKey: name,
             kAudioAggregateDeviceUIDKey: deviceUID,
@@ -181,6 +191,21 @@ public final class AggregateDeviceManager: @unchecked Sendable {
     public func destroyDeviceByName(_ name: String) {
         let allDevs = AudioDeviceManager.shared.refreshDevices()
         for dev in allDevs where dev.name == name {
+            lock.lock()
+            managedDeviceIDs.remove(dev.id)
+            lock.unlock()
+            AudioHardwareDestroyAggregateDevice(dev.id)
+        }
+        AudioDeviceManager.shared.refreshDevices()
+    }
+
+    /// Destroys any aggregate devices matching the given UID.
+    public func destroyDeviceByUID(_ uid: String) {
+        let allDevs = AudioDeviceManager.shared.refreshDevices()
+        for dev in allDevs where dev.uid == uid {
+            lock.lock()
+            managedDeviceIDs.remove(dev.id)
+            lock.unlock()
             AudioHardwareDestroyAggregateDevice(dev.id)
         }
         AudioDeviceManager.shared.refreshDevices()
@@ -189,16 +214,33 @@ public final class AggregateDeviceManager: @unchecked Sendable {
     /// Official name for the ephemeral virtual microphone published by AppAudioRouter.
     public static let virtualMicDeviceName = "AppAudioRouter Virtual Microphone"
 
+    /// Deterministic, static UID for the ephemeral virtual microphone to maintain browser/WebRTC binding across app sessions.
+    public static let virtualMicUID = "com.appaudiorouter.virtualmic.default"
+
     /// Automatically constructs the ephemeral AppAudioRouter Virtual Microphone wrapping the loopback sub-device.
     /// Destroyed automatically when AppAudioRouter terminates.
     @discardableResult
     public func createVirtualMicrophone(subDeviceUID: String) -> AudioObjectID? {
+        let devices = AudioDeviceManager.shared.refreshDevices()
+        if let existing = devices.first(where: { $0.uid == Self.virtualMicUID }),
+           existing.name == Self.virtualMicDeviceName,
+           existing.isAggregate,
+           existing.isInput,
+           getSubDeviceUIDs(for: existing.id) == [subDeviceUID] {
+            lock.lock()
+            managedDeviceIDs.insert(existing.id)
+            lock.unlock()
+            return existing.id
+        }
+
         destroyDeviceByName(AggregateDeviceManager.virtualMicDeviceName)
         destroyDeviceByName("Desktop Input Microphone")
+        destroyDeviceByUID(AggregateDeviceManager.virtualMicUID)
 
         return createAggregateInputDevice(
             name: AggregateDeviceManager.virtualMicDeviceName,
             subDeviceUIDs: [subDeviceUID],
+            deviceUID: AggregateDeviceManager.virtualMicUID,
             isPrivate: false
         )
     }
@@ -207,5 +249,6 @@ public final class AggregateDeviceManager: @unchecked Sendable {
     public func destroyVirtualMicrophone() {
         destroyDeviceByName(AggregateDeviceManager.virtualMicDeviceName)
         destroyDeviceByName("Desktop Input Microphone")
+        destroyDeviceByUID(AggregateDeviceManager.virtualMicUID)
     }
 }

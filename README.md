@@ -71,12 +71,12 @@ cd app-audio-router
    - メニューバー右上に波形アイコン（`waveform.circle.fill`）が表示されます。
    - クリックしてポップオーバーを開きます。
 3. **仮想マイクの確認**:
-   - ポップオーバー上部に「Virtual Microphone: AppAudioRouter Virtual Input (Active)」と表示されていることを確認します。
-4. **通話アプリ / ブラウザの設定**:
-   - Zoom や Brave ブラウザ等の音声設定で、マイク（入力デバイス）として **`AppAudioRouter Virtual Input`** を選択します。
-5. **音声送出の開始**:
-   - デスクトップ音声を送出する場合は **Desktop Audio to Device** を ON にします。
+   - ポップオーバーに `AppAudioRouter Virtual Microphone` が表示されることを確認します。
+4. **音声送出の開始**:
+   - デスクトップ音声を送出する場合は **Desktop Audio to Virtual Mic** を ON にします。
    - 物理マイク音声も一緒に送出する場合は、該当マイクの **To Virtual Mic** を ON にします。
+5. **通話アプリ / ブラウザの設定**:
+   - Gemini をブラウザで使う場合、サイトのマイクとして **`BlackHole 2ch`** を選択します。`AppAudioRouter Virtual Microphone` が表示され、入力レベルが動く環境ではそちらも選べます。
 
 詳細は [docs/usage.md](docs/usage.md) を参照してください。
 
