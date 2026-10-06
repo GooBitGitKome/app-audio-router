@@ -36,6 +36,13 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         let primaryRingBuffer: AudioRingBuffer
         let micRingBuffer: AudioRingBuffer
         let sessionUUID = UUID()
+        let scratchCapacitySamples = 32_768
+        let interleavedScratch: UnsafeMutablePointer<Float>
+        let volumeValue = RealtimeAtomicUInt32(Float(1.0).bitPattern)
+        let mutedValue = RealtimeAtomicUInt32(0)
+        let routeToMicValue = RealtimeAtomicUInt32(0)
+        let hasTargetValue = RealtimeAtomicUInt32(0)
+        let peakValue = RealtimeAtomicUInt32(0)
         var state: ProcessState
 
         init(processObjectID: AudioObjectID, pid: pid_t, tap: ProcessTap, aggregateDevice: TapAggregateDevice) {
@@ -46,6 +53,19 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             self.primaryRingBuffer = AudioRingBuffer()
             self.micRingBuffer = AudioRingBuffer()
             self.state = ProcessState()
+            self.interleavedScratch = .allocate(capacity: scratchCapacitySamples)
+        }
+
+        deinit {
+            interleavedScratch.deallocate()
+        }
+
+        func apply(_ newState: ProcessState) {
+            state = newState
+            volumeValue.store(newState.volume.bitPattern)
+            mutedValue.store(newState.isMuted ? 1 : 0)
+            routeToMicValue.store(newState.routeToMic ? 1 : 0)
+            hasTargetValue.store(newState.targetDeviceUID == nil ? 0 : 1)
         }
     }
 
@@ -58,22 +78,27 @@ public final class AudioRoutingEngine: @unchecked Sendable {
     private var desktopTapID: AudioObjectID = 0
     private var desktopAggregate: TapAggregateDevice?
     private var desktopMicRingBuffer: AudioRingBuffer?
+    private let desktopInterleavedScratch = UnsafeMutablePointer<Float>.allocate(capacity: 32_768)
+    private let desktopPeakBits = RealtimeAtomicUInt32(0)
+    private let desktopVolumeBits = RealtimeAtomicUInt32(Float(1.0).bitPattern)
+    private let desktopMutedFlag = RealtimeAtomicUInt32(0)
+    private let desktopMeterQueue = DispatchQueue(label: "com.appaudiorouter.desktop.meter", qos: .utility)
+    private var desktopMeterTimer: DispatchSourceTimer?
+    private let processMeterQueue = DispatchQueue(label: "com.appaudiorouter.process.meter", qos: .utility)
+    private var processMeterTimer: DispatchSourceTimer?
     public private(set) var isDesktopAudioToMicEnabled: Bool = false
     public private(set) var activeVirtualMicUID: String?
     public private(set) var desktopTapExcludedBundleIDs: Set<String> = []
     public private(set) var unresolvedDesktopTapExcludedBundleIDs: Set<String> = []
 
-    private var _desktopVolume: Float = 1.0
-    private var _isDesktopMuted: Bool = false
-
     public var desktopVolume: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _desktopVolume }
-        set { lock.lock(); _desktopVolume = max(0.0, min(newValue, 2.0)); lock.unlock() }
+        get { Float(bitPattern: desktopVolumeBits.load()) }
+        set { desktopVolumeBits.store(max(0.0, min(newValue, 2.0)).bitPattern) }
     }
 
     public var isDesktopMuted: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _isDesktopMuted }
-        set { lock.lock(); _isDesktopMuted = newValue; lock.unlock() }
+        get { desktopMutedFlag.load() != 0 }
+        set { desktopMutedFlag.store(newValue ? 1 : 0) }
     }
 
     public var onPeakLevelUpdate: (@Sendable (pid_t, Float) -> Void)?
@@ -93,6 +118,8 @@ public final class AudioRoutingEngine: @unchecked Sendable {
     }
 
     deinit {
+        desktopMeterTimer?.cancel()
+        processMeterTimer?.cancel()
         if desktopTapID != 0 {
             desktopAggregate?.stop()
             desktopAggregate?.destroy()
@@ -111,6 +138,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         for renderer in activeRenderers {
             renderer.stop()
         }
+        desktopInterleavedScratch.deallocate()
     }
 
     public func setActiveVirtualMicUID(_ uid: String) {
@@ -158,7 +186,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
     public func startTapping(process: AudioProcess, state: ProcessState = ProcessState()) -> Bool {
         lock.lock()
         if let existing = sessions[process.pid] {
-            existing.state = state
+            existing.apply(state)
             lock.unlock()
             updateRoutingForSession(existing)
             return true
@@ -185,7 +213,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             tap: tap,
             aggregateDevice: aggregate
         )
-        session.state = state
+        session.apply(state)
 
         // Setup buffer callback
         aggregate.onAudioBuffer = { [weak self, weak session] bufferList in
@@ -202,6 +230,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         lock.lock()
         sessions[process.pid] = session
         lock.unlock()
+        startProcessMeterTimer()
 
         updateRoutingForSession(session)
         return true
@@ -220,11 +249,22 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         session.aggregateDevice.stop()
         session.aggregateDevice.destroy()
         session.tap.destroy()
+        lock.lock()
+        let hasSessions = !sessions.isEmpty
+        lock.unlock()
+        if !hasSessions {
+            processMeterTimer?.cancel()
+            processMeterTimer = nil
+        }
     }
 
     public func setVolume(pid: pid_t, volume: Float) {
         lock.lock()
-        sessions[pid]?.state.volume = max(0.0, min(volume, 2.0))
+        if let session = sessions[pid] {
+            let clamped = max(0.0, min(volume, 2.0))
+            session.state.volume = clamped
+            session.volumeValue.store(clamped.bitPattern)
+        }
         lock.unlock()
     }
 
@@ -235,6 +275,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             return
         }
         session.state.isMuted = isMuted
+        session.mutedValue.store(isMuted ? 1 : 0)
         let shouldMuteOriginal = (session.state.targetDeviceUID != nil) || isMuted
         lock.unlock()
 
@@ -248,6 +289,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             return
         }
         session.state.targetDeviceUID = deviceUID
+        session.hasTargetValue.store(deviceUID == nil ? 0 : 1)
         let shouldMuteOriginal = (deviceUID != nil) || session.state.isMuted
         lock.unlock()
 
@@ -262,6 +304,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             return
         }
         session.state.routeToMic = route
+        session.routeToMicValue.store(route ? 1 : 0)
         lock.unlock()
 
         updateRoutingForSession(session)
@@ -306,6 +349,8 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         }
 
         if !enabled {
+            desktopMeterTimer?.cancel()
+            desktopMeterTimer = nil
             desktopAggregate?.stop()
             desktopAggregate?.destroy()
             if desktopTapID != 0 {
@@ -318,6 +363,7 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             desktopAggregate = nil
             desktopMicRingBuffer = nil
             isDesktopAudioToMicEnabled = false
+            desktopPeakBits.store(0)
             onDesktopPeakLevelUpdate?(0.0)
             return
         }
@@ -399,16 +445,12 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             // 1. Calculate incoming raw peak level
             let rawPeak = AudioBufferProcessor.calculatePeakLevel(from: bufferList)
 
-            let vol: Float
-            let muted: Bool
-            self.lock.lock()
-            vol = self._desktopVolume
-            muted = self._isDesktopMuted
-            self.lock.unlock()
+            let vol = Float(bitPattern: self.desktopVolumeBits.load())
+            let muted = self.desktopMutedFlag.load() != 0
 
             // 2. Report peak level (0 if muted)
             let effectivePeak = muted ? 0.0 : min(1.0, rawPeak * min(vol, 1.0))
-            self.onDesktopPeakLevelUpdate?(effectivePeak)
+            self.desktopPeakBits.store(effectivePeak.bitPattern)
 
             // If muted or volume is essentially 0, skip writing to virtual mic ring buffer
             if muted || vol <= 0.0001 {
@@ -431,24 +473,20 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             if abl.count == 1 {
                 let channels = max(1, Int(firstBuf.mNumberChannels))
                 let frameCount = Int(firstBuf.mDataByteSize) / (MemoryLayout<Float>.size * channels)
-                guard frameCount > 0 else { return }
+                guard frameCount > 0, frameCount * channels <= 32_768 else { return }
                 let floatPtr = firstRaw.bindMemory(to: Float.self, capacity: frameCount * channels)
                 ring.write(frames: frameCount, from: floatPtr)
             } else if abl.count >= 2 {
                 let frameCount = Int(firstBuf.mDataByteSize) / MemoryLayout<Float>.size
-                guard frameCount > 0, let secondRaw = abl[1].mData else { return }
+                guard frameCount > 0, frameCount * 2 <= 32_768, let secondRaw = abl[1].mData else { return }
                 let floatPtrL = firstRaw.bindMemory(to: Float.self, capacity: frameCount)
                 let floatPtrR = secondRaw.bindMemory(to: Float.self, capacity: frameCount)
 
-                var interleaved = [Float](repeating: 0.0, count: frameCount * 2)
                 for i in 0..<frameCount {
-                    interleaved[i * 2] = floatPtrL[i]
-                    interleaved[i * 2 + 1] = floatPtrR[i]
+                    self.desktopInterleavedScratch[i * 2] = floatPtrL[i]
+                    self.desktopInterleavedScratch[i * 2 + 1] = floatPtrR[i]
                 }
-                interleaved.withUnsafeBufferPointer { ptr in
-                    guard let base = ptr.baseAddress else { return }
-                    ring.write(frames: frameCount, from: base)
-                }
+                ring.write(frames: frameCount, from: self.desktopInterleavedScratch)
             }
         }
 
@@ -463,6 +501,19 @@ public final class AudioRoutingEngine: @unchecked Sendable {
         self.desktopAggregate = aggregate
         self.desktopMicRingBuffer = ring
         self.isDesktopAudioToMicEnabled = true
+        startDesktopMeterTimer()
+    }
+
+    private func startDesktopMeterTimer() {
+        desktopMeterTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: desktopMeterQueue)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.onDesktopPeakLevelUpdate?(Float(bitPattern: self.desktopPeakBits.load()))
+        }
+        desktopMeterTimer = timer
+        timer.resume()
     }
 
     // MARK: - Microphone Live Routing & Mixing
@@ -554,17 +605,42 @@ public final class AudioRoutingEngine: @unchecked Sendable {
 
     // MARK: - Buffer Handling & DSP
 
+    private func startProcessMeterTimer() {
+        guard processMeterTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: processMeterQueue)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock()
+            let sessions = Array(self.sessions.values)
+            let updates = sessions.map { session -> (pid_t, Float) in
+                let peak = Float(bitPattern: session.peakValue.load())
+                session.state.peakLevel = peak
+                return (session.pid, peak)
+            }
+            self.lock.unlock()
+            for (pid, peak) in updates {
+                self.onPeakLevelUpdate?(pid, peak)
+            }
+        }
+        processMeterTimer = timer
+        timer.resume()
+    }
+
     private func handleCapturedBuffer(session: ActiveSession, bufferList: UnsafePointer<AudioBufferList>) {
         let peak = AudioBufferProcessor.calculatePeakLevel(from: bufferList)
-        session.state.peakLevel = peak
-        onPeakLevelUpdate?(session.pid, peak)
+        session.peakValue.store(peak.bitPattern)
 
         let mutableBufferList = UnsafeMutablePointer(mutating: bufferList)
         AudioBufferProcessor.processInPlace(
             bufferList: mutableBufferList,
-            volume: session.state.volume,
-            isMuted: session.state.isMuted
+            volume: Float(bitPattern: session.volumeValue.load()),
+            isMuted: session.mutedValue.load() != 0
         )
+
+        let hasTarget = session.hasTargetValue.load() != 0
+        let routeToMic = session.routeToMicValue.load() != 0
+        guard hasTarget || routeToMic else { return }
 
         let abl = UnsafeMutableAudioBufferListPointer(mutableBufferList)
         guard let firstBuf = abl.first, let firstRaw = firstBuf.mData else { return }
@@ -575,31 +651,28 @@ public final class AudioRoutingEngine: @unchecked Sendable {
             guard frameCount > 0 else { return }
             let floatPtr = firstRaw.bindMemory(to: Float.self, capacity: frameCount * channels)
 
-            if session.state.targetDeviceUID != nil {
+            if hasTarget {
                 session.primaryRingBuffer.write(frames: frameCount, from: floatPtr)
             }
-            if session.state.routeToMic {
+            if routeToMic {
                 session.micRingBuffer.write(frames: frameCount, from: floatPtr)
             }
         } else if abl.count >= 2 {
             let frameCount = Int(firstBuf.mDataByteSize) / MemoryLayout<Float>.size
-            guard frameCount > 0, let secondRaw = abl[1].mData else { return }
+            guard frameCount > 0, frameCount * 2 <= session.scratchCapacitySamples,
+                  let secondRaw = abl[1].mData else { return }
             let floatPtrL = firstRaw.bindMemory(to: Float.self, capacity: frameCount)
             let floatPtrR = secondRaw.bindMemory(to: Float.self, capacity: frameCount)
 
-            var interleaved = [Float](repeating: 0.0, count: frameCount * 2)
             for i in 0..<frameCount {
-                interleaved[i * 2] = floatPtrL[i]
-                interleaved[i * 2 + 1] = floatPtrR[i]
+                session.interleavedScratch[i * 2] = floatPtrL[i]
+                session.interleavedScratch[i * 2 + 1] = floatPtrR[i]
             }
-            interleaved.withUnsafeBufferPointer { ptr in
-                guard let base = ptr.baseAddress else { return }
-                if session.state.targetDeviceUID != nil {
-                    session.primaryRingBuffer.write(frames: frameCount, from: base)
-                }
-                if session.state.routeToMic {
-                    session.micRingBuffer.write(frames: frameCount, from: base)
-                }
+            if hasTarget {
+                session.primaryRingBuffer.write(frames: frameCount, from: session.interleavedScratch)
+            }
+            if routeToMic {
+                session.micRingBuffer.write(frames: frameCount, from: session.interleavedScratch)
             }
         }
     }

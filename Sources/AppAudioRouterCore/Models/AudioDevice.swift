@@ -18,6 +18,12 @@ public struct AudioDevice: Identifiable, Hashable, Sendable {
     public let inputChannelCount: Int
     public let outputChannelCount: Int
 
+    /// Only the dedicated desktop loopback wrapper has this identity.
+    /// User-created Combined Microphones devices must not be used in its place.
+    public var isAppVirtualMicrophone: Bool {
+        isInput && isAggregate && uid == AggregateDeviceManager.virtualMicUID
+    }
+
     public init(
         id: AudioObjectID,
         uid: String,

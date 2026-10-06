@@ -25,8 +25,8 @@ macOS 14.2+ (Sonoma / Sequoia) 向けのメニューバー常駐型オーディ�
    - 仮想マイクへ送出されているミックス音声（デスクトップ音声＋物理マイク音声）をアプリ内で直接テスト録音。
    - 録音後、デフォルト出力スピーカーからワンクリックで再生し、音質や音量バランスを事前確認可能。
 
-5. **メニューバー常駐型UI (SwiftUI MenuBarExtra)**
-   - Dockを占有せず、メニューバーアイコンから手軽に操作できる軽量UI。
+5. **メニューバー操作 + Dock対応UI (SwiftUI MenuBarExtra)**
+   - メニューバーから音声設定と終了を操作でき、通常のアプリと同様にDockへ追加できます。
 
 6. **CLI診断・保守ツール (`AppAudioRouterCLI`)**
    - ターミナルからオーディオデバイス一覧表示、システム診断（`diagnose`）、テストトーン送出（`test-tone`）等を実行可能。
@@ -48,13 +48,12 @@ macOS 14.2+ (Sonoma / Sequoia) 向けのメニューバー常駐型オーディ�
 
 ## 📥 インストール (Installation)
 
-### 開発用アプリバンドルのビルド
-```bash
-git clone https://github.com/your-username/app-audio-router.git
-cd app-audio-router
+### ダウンロードしてインストール
+配布用ZIPは `dist/AppAudioRouter-macOS.zip` です。展開後、`AppAudioRouter.app` を `/Applications` にコピーして起動してください。詳細は [docs/installation.md](docs/installation.md) を参照してください。
 
-# アプリケーションバンドル (.app) の生成
-./scripts/package_app.sh
+### 配布物の作成
+```bash
+./scripts/package_release.sh
 ```
 
 詳細は [docs/installation.md](docs/installation.md) を参照してください。
@@ -68,7 +67,7 @@ cd app-audio-router
    open AppAudioRouter.app
    ```
 2. **メニューバーアイコンの確認**:
-   - メニューバー右上に波形アイコン（`waveform.circle.fill`）が表示されます。
+   - Dockにアプリのアイコン、メニューバー右上に波形アイコン（`waveform.circle.fill`）が表示されます。
    - クリックしてポップオーバーを開きます。
 3. **仮想マイクの確認**:
    - ポップオーバーに `AppAudioRouter Virtual Microphone` が表示されることを確認します。
@@ -77,6 +76,7 @@ cd app-audio-router
    - 物理マイク音声も一緒に送出する場合は、該当マイクの **To Virtual Mic** を ON にします。
 5. **通話アプリ / ブラウザの設定**:
    - Gemini をブラウザで使う場合、サイトのマイクとして **`BlackHole 2ch`** を選択します。`AppAudioRouter Virtual Microphone` が表示され、入力レベルが動く環境ではそちらも選べます。
+6. **Dockに固定・終了**: Dockのアイコンを右クリックして「オプション」>「Dockに追加」を選択します。終了はメニューバーの波形アイコンから **Quit** を選びます。
 
 詳細は [docs/usage.md](docs/usage.md) を参照してください。
 
@@ -130,7 +130,7 @@ AI 利用方針および検証ルールについては [AI_USAGE.md](AI_USAGE.md
 
 ## 📌 バージョン & 変更履歴 (Version & Changelog)
 
-- 現在のバージョン: **1.0.0**
+- 現在のバージョン: **1.1.0**
 - 変更履歴: [CHANGELOG.md](CHANGELOG.md)
 
 ---

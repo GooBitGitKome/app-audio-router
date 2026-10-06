@@ -3,6 +3,12 @@ import CoreAudio
 @testable import AppAudioRouterCore
 
 final class AggregateDeviceManagerTests: XCTestCase {
+    func testAggregateRejectsMissingSubdevice() {
+        let manager = AggregateDeviceManager()
+        XCTAssertNil(manager.createAggregateInputDevice(
+            subDeviceUIDs: ["com.appaudiorouter.tests.missing.\(UUID().uuidString)"]
+        ))
+    }
     func testCreateAggregateInputDevice() {
         let manager = AggregateDeviceManager.shared
         let inputDevices = AudioDeviceManager.shared.getInputDevices().filter { !$0.isAggregate && $0.inputChannelCount > 0 }
@@ -71,8 +77,12 @@ final class AggregateDeviceManagerTests: XCTestCase {
         XCTAssertEqual(AggregateDeviceManager.virtualMicDeviceName, "AppAudioRouter Virtual Microphone")
     }
 
-    func testVirtualMicrophoneCreationIsIdempotent() {
-        let manager = AggregateDeviceManager.shared
+    func testVirtualMicrophoneCreationIsIdempotent() throws {
+        let manager = AggregateDeviceManager()
+        let devices = AudioDeviceManager.shared.refreshDevices()
+        guard !devices.contains(where: { $0.uid == AggregateDeviceManager.virtualMicUID }) else {
+            throw XCTSkip("A running app already owns the virtual microphone; do not disturb it")
+        }
         let source = AudioDeviceManager.shared.getAllDevices().first {
             $0.isInput && $0.isOutput && !$0.isAggregate &&
             ($0.uid.lowercased().contains("blackhole") || $0.uid.contains("zoom.us.zoomaudiodevice"))
@@ -89,7 +99,25 @@ final class AggregateDeviceManagerTests: XCTestCase {
 
         XCTAssertNotNil(firstID)
         XCTAssertEqual(secondID, firstID, "Repeated setup should reuse the same aggregate device")
+        let borrower = AggregateDeviceManager()
+        XCTAssertEqual(borrower.createVirtualMicrophone(subDeviceUID: source.uid), firstID)
+        borrower.destroyVirtualMicrophone()
+        borrower.destroyAll()
+        XCTAssertTrue(AudioDeviceManager.shared.refreshDevices().contains { $0.id == firstID },
+                      "A second manager must not destroy a borrowed virtual microphone")
         XCTAssertEqual(AudioDeviceManager.shared.getDefaultInputDevice()?.id, originalDefaultInput,
                        "Creating the virtual microphone must not change macOS default input")
+    }
+
+    func testCombinedMicrophonesCannotMasqueradeAsDesktopVirtualMic() {
+        let combined = AudioDevice(id: 1, uid: "com.appaudiorouter.aggregatemic.test",
+                                   name: AggregateDeviceManager.virtualMicDeviceName,
+                                   manufacturer: "Test", isInput: true, isOutput: true,
+                                   isAggregate: true)
+        XCTAssertFalse(combined.isAppVirtualMicrophone)
+        let dedicated = AudioDevice(id: 2, uid: AggregateDeviceManager.virtualMicUID,
+                                    name: "Renamed device", manufacturer: "Test",
+                                    isInput: true, isOutput: true, isAggregate: true)
+        XCTAssertTrue(dedicated.isAppVirtualMicrophone)
     }
 }

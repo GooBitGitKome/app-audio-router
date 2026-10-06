@@ -18,7 +18,20 @@
 
 ---
 
-## 2. セットアップ手順
+## 2. ダウンロード版をインストールする
+
+配布ZIP `AppAudioRouter-macOS.zip` を展開し、フォルダ内の `AppAudioRouter.app` を `/Applications` にコピーして起動します。アプリはメニューバーとDockの両方に表示されます。
+
+1. `AppAudioRouter.app` を `/Applications` へドラッグします。
+2. `/Applications/AppAudioRouter.app` を開き、初回のマイク・システムオーディオ権限を許可します。
+3. Dockアイコンを右クリックし、「オプション」>「Dockに追加」を選ぶと、終了後もDockに固定できます。
+4. 終了する場合は、メニューバーの波形アイコンから **Quit** を選びます。仮想マイクはアプリ終了時にクリーンアップされます。
+
+配布ZIPにはBrave用の `BrowserExtension` とこのインストールガイドも含まれます。GFNとBraveの入力を分ける拡張の読み込み方法は [利用マニュアル](usage.md#32-brave-と-geforce-now-で別々のマイクを使う) を参照してください。
+
+この配布ビルドはDeveloper IDによる署名・Apple公証を行っていません。macOSが初回起動を止めた場合は、アプリをControlキーを押しながらクリックし「開く」を選択してください。
+
+## 3. ソースからセットアップする
 
 ### ステップ 1: リポジトリのクローン
 ```bash
@@ -48,13 +61,13 @@ swift build
 
 ---
 
-## 3. 動作確認
+## 4. 動作確認
 
 ### 1. 単体テストの実行
 ```bash
 swift test
 ```
-7 つのユニットテストがすべて Pass することを確認します。
+テスト件数はコードの更新により変わります。テストコマンドの終了コードが 0 であることを確認します。
 
 ### 2. CLI 診断の実行
 ```bash
@@ -74,7 +87,7 @@ swift run AppAudioRouterCLI test-tone
 
 ---
 
-## 4. アプリケーションの初回起動と権限設定
+## 5. アプリケーションの初回起動と権限設定
 
 ### アプリケーションの起動
 ```bash
@@ -92,7 +105,7 @@ open ./AppAudioRouter.app
 
 ---
 
-## 5. よくあるトラブルシューティング
+## 6. よくあるトラブルシューティング
 
 ### Q1: `No suitable loopback device found` というエラーが出る
 - **原因**: BlackHole や Zoom 等の仮想オーディオドライバがシステムに存在しない。

@@ -36,6 +36,8 @@ struct AppAudioRouterCLI {
             await runDesktopAudioTest()
         case "diagnose":
             await runDiagnose()
+        case "watch-input":
+            await watchInputDevice(args: Array(args.dropFirst(2)))
         default:
             print("Unknown command: \(command)")
             printHelp()
@@ -58,6 +60,7 @@ struct AppAudioRouterCLI {
           app-audio-router test-tone                Verify 440Hz tone pipeline to Virtual Microphone
           app-audio-router test-desktop             Verify system desktop audio tap to Virtual Microphone
           app-audio-router diagnose                 Diagnose audio engine and virtual mic pipeline
+          app-audio-router watch-input [seconds]    Log default input and virtual mic changes
         """)
     }
 
@@ -69,11 +72,15 @@ struct AppAudioRouterCLI {
             if dev.isDefaultOutput { flags.append("DEFAULT_OUT") }
             if dev.isDefaultInput { flags.append("DEFAULT_IN") }
             if dev.isVirtual { flags.append("VIRTUAL") }
+            if dev.isAggregate { flags.append("AGGREGATE") }
             let flagStr = flags.isEmpty ? "" : " [\(flags.joined(separator: ", "))]"
 
             print("• [\(dev.id)] \(dev.name) (\(dev.manufacturer))\(flagStr)")
             print("    UID: \(dev.uid)")
             print("    Channels: In=\(dev.inputChannelCount), Out=\(dev.outputChannelCount), Rate: \(Int(dev.sampleRate))Hz")
+            if dev.isAggregate {
+                print("    Configured subdevices: \(AggregateDeviceManager.shared.getSubDeviceUIDs(for: dev.id).joined(separator: ", "))")
+            }
         }
     }
 
@@ -173,7 +180,7 @@ struct AppAudioRouterCLI {
         }
 
         let micName = AggregateDeviceManager.virtualMicDeviceName
-        if let existing = allDevs.first(where: { $0.isInput && ($0.name == micName || $0.name == "Desktop Input Microphone" || $0.uid == AggregateDeviceManager.virtualMicUID) }) {
+        if let existing = allDevs.first(where: \.isAppVirtualMicrophone) {
             let subs = AggregateDeviceManager.shared.getSubDeviceUIDs(for: existing.id)
             if subs.contains(loopback.uid) && existing.name == micName {
                 print("\(micName) already active (ID: \(existing.id)).")
@@ -201,13 +208,32 @@ struct AppAudioRouterCLI {
     static func cleanupVirtualMic() {
         let micName = AggregateDeviceManager.virtualMicDeviceName
         print("Cleaning up and destroying \(micName)...")
-        AggregateDeviceManager.shared.destroyVirtualMicrophone()
+        AggregateDeviceManager.shared.destroyDeviceByUID(AggregateDeviceManager.virtualMicUID)
         print("Done. Virtual microphone removed.")
     }
 
     static func runDiagnose() async {
         let allDevs = AudioDeviceManager.shared.refreshDevices()
         print("=== DIAGNOSTIC START ===")
+        if let defaultInput = allDevs.first(where: \.isDefaultInput) {
+            print("Default Input: \(defaultInput.name) (UID: \(defaultInput.uid))")
+            if defaultInput.isAggregate {
+                let sources = AggregateDeviceManager.shared.getSubDeviceUIDs(for: defaultInput.id)
+                print("Default Input aggregate sources: \(sources.joined(separator: ", "))")
+                for uid in sources where !allDevs.contains(where: { $0.uid == uid }) {
+                    print("WARNING: Default Input references an unavailable subdevice: \(uid)")
+                }
+            }
+        } else {
+            print("Default Input: NOT FOUND")
+        }
+        let micName = AggregateDeviceManager.virtualMicDeviceName
+        let virtualMic = allDevs.first(where: \.isAppVirtualMicrophone)
+        if let mic = virtualMic {
+            print("AppAudioRouter Virtual Microphone: present (UID: \(mic.uid), source candidates are listed below)")
+        } else {
+            print("AppAudioRouter Virtual Microphone: NOT FOUND")
+        }
         guard let loopback = allDevs.first(where: { ($0.uid.lowercased().contains("blackhole") && !$0.uid.contains("VirtualDesktop")) || $0.uid.contains("zoom.us.zoomaudiodevice") })
             ?? allDevs.first(where: { $0.isVirtual && $0.inputChannelCount > 0 && $0.outputChannelCount > 0 && !$0.uid.contains("VirtualDesktop") })
             ?? allDevs.first(where: { $0.uid.contains("VirtualDesktop") }) else {
@@ -218,8 +244,6 @@ struct AppAudioRouterCLI {
         print("  Channels: In=\(loopback.inputChannelCount), Out=\(loopback.outputChannelCount), Rate: \(loopback.sampleRate)Hz")
 
         // Check AppAudioRouter Virtual Microphone
-        let micName = AggregateDeviceManager.virtualMicDeviceName
-        let virtualMic = allDevs.first(where: { $0.name == micName || $0.name == "Desktop Input Microphone" || $0.uid == AggregateDeviceManager.virtualMicUID })
         if let mic = virtualMic {
             print("\(mic.name) found: (ID: \(mic.id), UID: \(mic.uid))")
             print("  Channels: In=\(mic.inputChannelCount), Out=\(mic.outputChannelCount), Rate: \(mic.sampleRate)Hz")
@@ -289,13 +313,6 @@ struct AppAudioRouterCLI {
                 guard let data = buf.mData else { continue }
                 let count = Int(buf.mDataByteSize) / 4
                 let ptr = data.bindMemory(to: Float.self, capacity: count)
-                if inputCallCount == 2 {
-                    let preview = (0..<min(10, count)).map { String(format: "%.4f", ptr[$0]) }.joined(separator: ", ")
-                    print("  [DEBUG input raw samples 0..10]: \(preview)")
-                    let int16Ptr = data.bindMemory(to: Int16.self, capacity: Int(buf.mDataByteSize) / 2)
-                    let intPreview = (0..<min(10, Int(buf.mDataByteSize) / 2)).map { "\($0): \(int16Ptr[$0])" }.joined(separator: ", ")
-                    print("  [DEBUG input if Int16]: \(intPreview)")
-                }
                 for j in 0..<count {
                     let val = abs(ptr[j])
                     if val > maxPeakDetected { maxPeakDetected = val }
@@ -345,15 +362,13 @@ struct AppAudioRouterCLI {
                     let setErr = AudioObjectSetPropertyData(tapAgg.aggregateDeviceID, &rateAddr, 0, nil, UInt32(MemoryLayout<Float64>.size), &targetRate)
                     printStreamFormat(id: tapAgg.aggregateDeviceID, scope: kAudioDevicePropertyScopeInput, label: "Tap Aggregate Input Format (after setRate \(setErr))")
                     printStreamFormat(id: tapAgg.aggregateDeviceID, scope: kAudioDevicePropertyScopeOutput, label: "Tap Aggregate Output Format")
-                    tapAgg.onAudioBuffer = { bufList in
-                        let numBufs = bufList.pointee.mNumberBuffers
-                        let first = bufList.pointee.mBuffers
-                        print("  Tap Buffer received: numBuffers=\(numBufs), chans=\(first.mNumberChannels), byteSize=\(first.mDataByteSize)")
-                        tapAgg.onAudioBuffer = nil
-                    }
+                    tapAgg.onAudioBuffer = { _ in }
                     if tapAgg.start() {
+                        print("  Tap started; buffer callbacks are active.")
                         try? await Task.sleep(nanoseconds: 300_000_000)
                         tapAgg.stop()
+                    } else {
+                        print("  Tap failed to start.")
                     }
                     tapAgg.destroy()
                 }
@@ -370,6 +385,39 @@ struct AppAudioRouterCLI {
         try? await Task.sleep(nanoseconds: 500_000_000)
         AudioRoutingEngine.shared.setDesktopAudioToMic(enabled: false)
         print("=== DIAGNOSTIC END ===")
+    }
+
+    static func watchInputDevice(args: [String]) async {
+        let seconds = max(1.0, min(Double(args.first ?? "60") ?? 60.0, 3600.0))
+        let end = Date().addingTimeInterval(seconds)
+        var previousDevices: [AudioDevice]?
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        print("Watching all audio device IDs, defaults, channel counts and sample rates for \(Int(seconds)) seconds.")
+        print("This observes macOS devices; it cannot read Brave's active microphone track or identify who changed a default.")
+        print("Use Activity Monitor during this interval to identify which process spikes CPU.")
+
+        while Date() < end {
+            let devices = AudioDeviceManager.shared.refreshDevices().sorted { $0.uid < $1.uid }
+            let defaultInput = devices.first(where: \.isDefaultInput)
+            if devices != previousDevices {
+                print("\(formatter.string(from: Date())) defaultInput=\(defaultInput?.name ?? "<none>") defaultOutput=\(devices.first(where: \.isDefaultOutput)?.name ?? "<none>")")
+                if let previousDevices {
+                    for old in previousDevices where !devices.contains(where: { $0.uid == old.uid }) {
+                        print("  REMOVED \(old.name) id=\(old.id) uid=\(old.uid)")
+                    }
+                }
+                for device in devices where previousDevices?.contains(device) != true {
+                    print("  DEVICE \(device.name) id=\(device.id) uid=\(device.uid) input=\(device.inputChannelCount) output=\(device.outputChannelCount) rate=\(device.sampleRate) defaultInput=\(device.isDefaultInput) defaultOutput=\(device.isDefaultOutput)")
+                }
+                if devices.isEmpty {
+                    print("  No devices visible. Check CoreAudio access; this is not evidence that drivers are uninstalled.")
+                }
+                fflush(nil)
+                previousDevices = devices
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
     }
 
     static func printStreamFormat(id: AudioObjectID, scope: AudioObjectPropertyScope, label: String) {

@@ -9,15 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- App now appears in the Dock as a regular macOS application while retaining the menu bar controls and Quit action.
+- Added a release packaging script that creates a downloadable ZIP containing the app, Brave extension, and Japanese installation guide.
+
 ### Fixed
+- Added an optional Brave extension that pins ChatGPT/Gemini `getUserMedia()` audio requests to BlackHole or AppAudioRouter Virtual Microphone with an exact device ID, preventing an automatic fallback to GFN's current physical/default input.
+- Aggregate creation now rejects missing or nested aggregate subdevices instead of accepting stale tap UIDs or silently dropping invalid members. `diagnose` reports unavailable members of the current default input.
+- Dedicated virtual-microphone identification no longer accepts unrelated Combined Microphones aggregates or matching display names. The current system input remains visible in Master Input.
+- Reusing an aggregate microphone no longer transfers ownership to a second app/CLI/test instance; normal cleanup cannot destroy a borrowed device. Reuse compares configured subdevice UIDs instead of only active devices.
+- Expanded `watch-input` to report BlackHole/Bluetooth and other device additions, removals, object IDs, channel counts, sample rates and default input/output changes.
+- Reduced real-time audio callback allocations and moved meter notifications off CoreAudio callback queues.
+- Audio ring callbacks now use non-waiting lock acquisition; a contended input block is dropped or the output block is filled with silence to keep CoreAudio callbacks moving.
+- App device/process lists now refresh from CoreAudio and workspace notifications rather than a 1.5-second full-enumeration poll.
 - Desktop-to-microphone routing now stays off when tap/device startup fails, and loopback selection requires a non-aggregate virtual device with both input and output channels.
 - Replacing an active desktop tap detaches its old renderer buffer before starting the new route.
 - Virtual microphone setup reuses the existing deterministic-UID device when its loopback source is unchanged, and the second launch-time setup call has been removed.
 - Desktop capture can exclude selected apps (including Chromium helper processes) by bundle identifier, with exclusions persisted and applied immediately to an active route.
 
 ### Documentation
+- Clarified the GeForce NOW setup: keep the physical microphone as macOS default and explicitly select BlackHole 2ch in Brave instead of Automatically.
 - Made `BlackHole 2ch` the recommended Gemini/Chromium microphone because the browser may not enumerate the app-created Aggregate Input Device; documented how to verify input in the browser.
 - Documented Safari YouTube + Chrome Gemini Live routing and separate Brave virtual-mic / GeForce NOW physical-mic selection.
+- Added `watch-input` diagnostics for tracking macOS default-input and virtual-microphone identity changes around GeForce NOW sessions.
 
 ---
 

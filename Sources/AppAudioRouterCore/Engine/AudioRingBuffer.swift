@@ -24,7 +24,10 @@ public final class AudioRingBuffer: @unchecked Sendable {
 
     /// Writes interleaved float samples into the circular buffer.
     public func write(frames: Int, from source: UnsafePointer<Float>) {
-        os_unfair_lock_lock(lock)
+        guard frames > 0 else { return }
+        // Audio callbacks must never wait for the other side of the ring.
+        // Dropping one input block is preferable to delaying a CoreAudio IOProc.
+        guard os_unfair_lock_trylock(lock) else { return }
         defer { os_unfair_lock_unlock(lock) }
 
         // If buffer would overflow, discard the oldest unread frames
@@ -53,7 +56,13 @@ public final class AudioRingBuffer: @unchecked Sendable {
     /// Reads interleaved float samples from the circular buffer.
     /// Fills unread frames with silence (0.0).
     public func read(frames: Int, into destination: UnsafeMutablePointer<Float>) -> Int {
-        os_unfair_lock_lock(lock)
+        guard frames > 0 else { return 0 }
+        guard os_unfair_lock_trylock(lock) else {
+            for sample in 0..<(frames * channels) {
+                destination[sample] = 0.0
+            }
+            return 0
+        }
         defer { os_unfair_lock_unlock(lock) }
 
         let framesToRead = min(frames, availableFrames)
@@ -74,7 +83,9 @@ public final class AudioRingBuffer: @unchecked Sendable {
         if framesToRead < frames {
             let silenceCount = (frames - framesToRead) * channels
             let silenceOffset = framesToRead * channels
-            destination.advanced(by: silenceOffset).initialize(repeating: 0.0, count: silenceCount)
+            for sample in 0..<silenceCount {
+                destination[silenceOffset + sample] = 0.0
+            }
         }
 
         return framesToRead

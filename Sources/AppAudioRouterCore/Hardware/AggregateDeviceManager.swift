@@ -94,10 +94,10 @@ public final class AggregateDeviceManager: @unchecked Sendable {
 
         let allDevices = AudioDeviceManager.shared.getAllDevices()
         let validUIDs = subDeviceUIDs.filter { uid in
-            guard let dev = allDevices.first(where: { $0.uid == uid }) else { return true }
+            guard let dev = allDevices.first(where: { $0.uid == uid }) else { return false }
             return !dev.isAggregate
         }
-        guard !validUIDs.isEmpty else { return nil }
+        guard validUIDs.count == subDeviceUIDs.count else { return nil }
 
         let master = masterUID ?? validUIDs[0]
 
@@ -167,24 +167,18 @@ public final class AggregateDeviceManager: @unchecked Sendable {
         }
     }
 
-    /// Retrieves all sub-device UIDs contained in an aggregate device.
+    /// Retrieves configured sub-device UIDs, including temporarily inactive devices.
     public func getSubDeviceUIDs(for deviceID: AudioObjectID) -> [String] {
         var address = AudioObjectPropertyAddress(
-            mSelector: AudioObjectPropertySelector(kAudioAggregateDevicePropertyActiveSubDeviceList),
+            mSelector: AudioObjectPropertySelector(kAudioAggregateDevicePropertyFullSubDeviceList),
             mScope: AudioObjectPropertyScope(kAudioObjectPropertyScopeGlobal),
             mElement: AudioObjectPropertyElement(kAudioObjectPropertyElementMain)
         )
-        var size: UInt32 = 0
-        let sizeErr = AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size)
-        guard sizeErr == noErr, size > 0 else { return [] }
-
-        let count = Int(size) / MemoryLayout<AudioObjectID>.size
-        var subIDs = [AudioObjectID](repeating: 0, count: count)
-        let dataErr = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &subIDs)
-        guard dataErr == noErr else { return [] }
-
-        let allDevs = AudioDeviceManager.shared.getAllDevices()
-        return subIDs.compactMap { sid in allDevs.first { $0.id == sid }?.uid }
+        var value: Unmanaged<CFArray>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFArray>?>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &value)
+        guard status == noErr, let value else { return [] }
+        return value.takeRetainedValue() as? [String] ?? []
     }
 
     /// Destroys any aggregate devices matching the given name.
@@ -225,17 +219,21 @@ public final class AggregateDeviceManager: @unchecked Sendable {
         if let existing = devices.first(where: { $0.uid == Self.virtualMicUID }),
            existing.name == Self.virtualMicDeviceName,
            existing.isAggregate,
-           existing.isInput,
            getSubDeviceUIDs(for: existing.id) == [subDeviceUID] {
-            lock.lock()
-            managedDeviceIDs.insert(existing.id)
-            lock.unlock()
+            // Reusing another process's device does not transfer ownership.
+            // A CLI invocation or test must not remove the running app's microphone.
             return existing.id
         }
 
-        destroyDeviceByName(AggregateDeviceManager.virtualMicDeviceName)
-        destroyDeviceByName("Desktop Input Microphone")
-        destroyDeviceByUID(AggregateDeviceManager.virtualMicUID)
+        if let existing = devices.first(where: { $0.uid == Self.virtualMicUID }) {
+            lock.lock()
+            let isOwned = managedDeviceIDs.contains(existing.id)
+            lock.unlock()
+            // A temporary format/availability change is not permission to tear
+            // down a microphone published by a different process.
+            guard isOwned else { return nil }
+            destroyDevice(id: existing.id)
+        }
 
         return createAggregateInputDevice(
             name: AggregateDeviceManager.virtualMicDeviceName,
@@ -247,8 +245,9 @@ public final class AggregateDeviceManager: @unchecked Sendable {
 
     /// Destroys the ephemeral AppAudioRouter Virtual Microphone.
     public func destroyVirtualMicrophone() {
-        destroyDeviceByName(AggregateDeviceManager.virtualMicDeviceName)
-        destroyDeviceByName("Desktop Input Microphone")
-        destroyDeviceByUID(AggregateDeviceManager.virtualMicUID)
+        let devices = AudioDeviceManager.shared.refreshDevices()
+        for device in devices where device.uid == Self.virtualMicUID {
+            destroyDevice(id: device.id)
+        }
     }
 }

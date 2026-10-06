@@ -15,8 +15,9 @@ struct AppAudioRouterApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Run as menu bar accessory without appearing in Dock
-        NSApp.setActivationPolicy(.accessory)
+        // Keep the menu bar controls and expose a normal Dock icon so users
+        // can keep the app in the Dock and quit it using standard macOS UI.
+        NSApp.setActivationPolicy(.regular)
         _ = AppState.shared.setupAppVirtualMicrophone()
     }
 

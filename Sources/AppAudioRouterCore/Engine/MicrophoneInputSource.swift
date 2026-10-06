@@ -12,44 +12,51 @@ public final class MicrophoneInputSource: @unchecked Sendable {
 
     public private(set) var isRunning: Bool = false
 
-    private let lock = NSLock()
-    private var _volume: Float = 1.0
-    private var _isMuted: Bool = false
-    private var _routeToVirtualMic: Bool = false
-    private var _peakLevel: Float = 0.0
+    private let volumeBits = RealtimeAtomicUInt32(Float(1.0).bitPattern)
+    private let mutedFlag = RealtimeAtomicUInt32(0)
+    private let routeFlag = RealtimeAtomicUInt32(0)
+    private let peakBits = RealtimeAtomicUInt32(0)
+    private let scratchSampleCapacity = 32_768
+    private let scratchBuffer: UnsafeMutablePointer<Float>
 
     public var volume: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _volume }
-        set { lock.lock(); _volume = max(0.0, min(newValue, 2.0)); lock.unlock() }
+        get { Float(bitPattern: volumeBits.load()) }
+        set { volumeBits.store(max(0.0, min(newValue, 2.0)).bitPattern) }
     }
 
     public var isMuted: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _isMuted }
-        set { lock.lock(); _isMuted = newValue; lock.unlock() }
+        get { mutedFlag.load() != 0 }
+        set { mutedFlag.store(newValue ? 1 : 0) }
     }
 
     public var routeToVirtualMic: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _routeToVirtualMic }
-        set { lock.lock(); _routeToVirtualMic = newValue; lock.unlock() }
+        get { routeFlag.load() != 0 }
+        set { routeFlag.store(newValue ? 1 : 0) }
     }
 
     public var peakLevel: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _peakLevel }
+        get { Float(bitPattern: peakBits.load()) }
     }
 
     public let ringBuffer = AudioRingBuffer()
     private var ioProcID: AudioDeviceIOProcID?
     private let ioQueue = DispatchQueue(label: "com.appaudiorouter.mic.input", qos: .userInteractive)
+    private let meterQueue = DispatchQueue(label: "com.appaudiorouter.mic.meter", qos: .utility)
+    private var meterTimer: DispatchSourceTimer?
 
     public var onPeakLevelUpdate: (@Sendable (Float) -> Void)?
 
     public init(deviceID: AudioObjectID, deviceUID: String) {
         self.deviceID = deviceID
         self.deviceUID = deviceUID
+        self.scratchBuffer = .allocate(capacity: scratchSampleCapacity)
+        self.scratchBuffer.initialize(repeating: 0, count: scratchSampleCapacity)
     }
 
     deinit {
         stop()
+        scratchBuffer.deinitialize(count: scratchSampleCapacity)
+        scratchBuffer.deallocate()
     }
 
     /// Starts capturing audio from the microphone hardware.
@@ -75,6 +82,7 @@ public final class MicrophoneInputSource: @unchecked Sendable {
         let startStatus = AudioDeviceStart(deviceID, validProcID)
         if startStatus == noErr {
             self.isRunning = true
+            startMeterTimer()
             return true
         } else {
             AudioDeviceDestroyIOProcID(deviceID, validProcID)
@@ -85,29 +93,35 @@ public final class MicrophoneInputSource: @unchecked Sendable {
 
     /// Stops capturing audio.
     public func stop() {
+        meterTimer?.cancel()
+        meterTimer = nil
         guard isRunning, let procID = ioProcID else { return }
         AudioDeviceStop(deviceID, procID)
         AudioDeviceDestroyIOProcID(deviceID, procID)
         self.ioProcID = nil
         self.isRunning = false
         ringBuffer.clear()
+        peakBits.store(0)
+    }
+
+    private func startMeterTimer() {
+        guard meterTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: meterQueue)
+        timer.schedule(deadline: .now() + .milliseconds(50), repeating: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.onPeakLevelUpdate?(Float(bitPattern: self.peakBits.load()))
+        }
+        meterTimer = timer
+        timer.resume()
     }
 
     private func handleCapturedBuffer(bufferList: UnsafePointer<AudioBufferList>) {
-        let currentVol: Float
-        let currentMuted: Bool
-        let routeActive: Bool
-        lock.lock()
-        currentVol = _volume
-        currentMuted = _isMuted
-        routeActive = _routeToVirtualMic
-        lock.unlock()
-
+        let currentVol = Float(bitPattern: volumeBits.load())
+        let currentMuted = mutedFlag.load() != 0
+        let routeActive = routeFlag.load() != 0
         let peak = AudioBufferProcessor.calculatePeakLevel(from: bufferList)
-        lock.lock()
-        _peakLevel = peak
-        lock.unlock()
-        onPeakLevelUpdate?(peak)
+        peakBits.store(peak.bitPattern)
 
         // Only stream to ring buffer if routing to virtual mic is enabled
         guard routeActive else { return }
@@ -118,45 +132,41 @@ public final class MicrophoneInputSource: @unchecked Sendable {
         if abl.count == 1 {
             let channelCount = max(1, Int(firstBuf.mNumberChannels))
             let frameCount = Int(firstBuf.mDataByteSize) / (MemoryLayout<Float>.size * channelCount)
-            guard frameCount > 0 else { return }
+            guard frameCount > 0, frameCount * 2 <= scratchSampleCapacity else { return }
             let floatPtr = firstRaw.bindMemory(to: Float.self, capacity: frameCount * channelCount)
 
-            var stereoBuffer = [Float](repeating: 0.0, count: frameCount * 2)
-            if !currentMuted && currentVol > 0.0001 {
+            if currentMuted || currentVol <= 0.0001 {
+                vDSP_vclr(scratchBuffer, 1, vDSP_Length(frameCount * 2))
+            } else {
                 if channelCount == 1 {
                     for f in 0..<frameCount {
                         let sample = floatPtr[f] * currentVol
-                        stereoBuffer[2 * f] = sample
-                        stereoBuffer[2 * f + 1] = sample
+                        scratchBuffer[2 * f] = sample
+                        scratchBuffer[2 * f + 1] = sample
                     }
                 } else {
                     for f in 0..<frameCount {
-                        stereoBuffer[2 * f] = floatPtr[channelCount * f] * currentVol
-                        stereoBuffer[2 * f + 1] = floatPtr[channelCount * f + 1] * currentVol
+                        scratchBuffer[2 * f] = floatPtr[channelCount * f] * currentVol
+                        scratchBuffer[2 * f + 1] = floatPtr[channelCount * f + 1] * currentVol
                     }
                 }
             }
-            stereoBuffer.withUnsafeBufferPointer { ptr in
-                guard let base = ptr.baseAddress else { return }
-                ringBuffer.write(frames: frameCount, from: base)
-            }
+            ringBuffer.write(frames: frameCount, from: scratchBuffer)
         } else if abl.count >= 2 {
             let frameCount = Int(firstBuf.mDataByteSize) / MemoryLayout<Float>.size
-            guard frameCount > 0, let secondRaw = abl[1].mData else { return }
+            guard frameCount > 0, frameCount * 2 <= scratchSampleCapacity, let secondRaw = abl[1].mData else { return }
             let floatPtrL = firstRaw.bindMemory(to: Float.self, capacity: frameCount)
             let floatPtrR = secondRaw.bindMemory(to: Float.self, capacity: frameCount)
 
-            var stereoBuffer = [Float](repeating: 0.0, count: frameCount * 2)
-            if !currentMuted && currentVol > 0.0001 {
+            if currentMuted || currentVol <= 0.0001 {
+                vDSP_vclr(scratchBuffer, 1, vDSP_Length(frameCount * 2))
+            } else {
                 for f in 0..<frameCount {
-                    stereoBuffer[2 * f] = floatPtrL[f] * currentVol
-                    stereoBuffer[2 * f + 1] = floatPtrR[f] * currentVol
+                    scratchBuffer[2 * f] = floatPtrL[f] * currentVol
+                    scratchBuffer[2 * f + 1] = floatPtrR[f] * currentVol
                 }
             }
-            stereoBuffer.withUnsafeBufferPointer { ptr in
-                guard let base = ptr.baseAddress else { return }
-                ringBuffer.write(frames: frameCount, from: base)
-            }
+            ringBuffer.write(frames: frameCount, from: scratchBuffer)
         }
     }
 }

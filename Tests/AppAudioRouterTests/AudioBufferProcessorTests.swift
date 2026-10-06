@@ -3,6 +3,16 @@ import CoreAudio
 @testable import AppAudioRouterCore
 
 final class AudioBufferProcessorTests: XCTestCase {
+    func testRealtimeAtomicUInt32LoadStoreAndIncrement() {
+        let value = RealtimeAtomicUInt32(12)
+
+        XCTAssertEqual(value.load(), 12)
+        value.store(34)
+        XCTAssertEqual(value.load(), 34)
+        XCTAssertEqual(value.increment(), 35)
+        XCTAssertEqual(value.load(), 35)
+    }
+
     func testAudioRingBufferWriteAndRead() {
         let ring = AudioRingBuffer(capacityFrames: 1024, channels: 2)
         let inputSamples: [Float] = [0.1, 0.2, 0.3, 0.4] // 2 frames of stereo

@@ -50,7 +50,7 @@ public final class AppState: @unchecked Sendable {
 
     /// Visible input devices for Master Input (physical inputs plus AppAudioRouter's own virtual microphone)
     public var visibleInputDevices: [AudioDevice] {
-        devices.filter { $0.isInput && (!$0.isVirtual || isAppVirtualMic(device: $0)) }
+        devices.filter { $0.isInput && ($0.isDefaultInput || !$0.isVirtual || isAppVirtualMic(device: $0)) }
     }
 
     /// Pure physical microphones (MacBook Pro mic, USB mic, headset mic).
@@ -74,10 +74,7 @@ public final class AppState: @unchecked Sendable {
     public var isDesktopInputMicReady: Bool { isVirtualMicReady }
 
     private func isAppVirtualMic(device: AudioDevice) -> Bool {
-        return device.name == AggregateDeviceManager.virtualMicDeviceName ||
-               device.name == "Desktop Input Microphone" ||
-               device.uid.contains("com.appaudiorouter.virtualmic") ||
-               device.uid.contains("com.appaudiorouter.aggregatemic")
+        device.isAppVirtualMicrophone
     }
 
     // Per-Application State
@@ -115,18 +112,16 @@ public final class AppState: @unchecked Sendable {
     private let deviceManager = AudioDeviceManager.shared
     private let processManager = AudioProcessManager.shared
     private let routingEngine = AudioRoutingEngine.shared
-    private var refreshTimer: Timer?
     private var appActiveObserver: NSObjectProtocol?
 
     public init() {
         refresh()
         setupListeners()
-        setupPolling()
+        setupApplicationObservers()
         routingEngine.setDesktopTapExcludedBundleIDs(excludedDesktopAudioBundleIDs)
     }
 
     deinit {
-        refreshTimer?.invalidate()
         if let obs = appActiveObserver {
             NotificationCenter.default.removeObserver(obs)
         }
@@ -150,11 +145,7 @@ public final class AppState: @unchecked Sendable {
         }
     }
 
-    private func setupPolling() {
-        refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            self?.refresh()
-        }
+    private func setupApplicationObservers() {
         appActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,
@@ -168,6 +159,12 @@ public final class AppState: @unchecked Sendable {
         deviceManager.onDevicesChanged = { [weak self] newDevices in
             Task { @MainActor in
                 self?.devices = newDevices
+            }
+        }
+
+        processManager.onProcessesChanged = { [weak self] newProcesses in
+            Task { @MainActor in
+                self?.processes = newProcesses
             }
         }
 

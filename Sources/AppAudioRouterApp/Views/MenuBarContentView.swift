@@ -278,7 +278,7 @@ public struct MenuBarContentView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(AggregateDeviceManager.virtualMicDeviceName)
                             .font(.system(size: 11, weight: .semibold))
-                        Text("Active only while app is running • Ready for Brave & Chrome")
+                        Text("Desktop loopback device • Select BlackHole 2ch in Brave")
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
@@ -359,7 +359,7 @@ public struct MenuBarContentView: View {
                     Text("For Gemini Live in Chrome, play YouTube in Safari and select BlackHole 2ch as Chrome's microphone. Exclude Chrome below to prevent Gemini's reply audio feeding back.")
                         .font(.system(size: 9))
                         .foregroundColor(.secondary)
-                    Text("For separate apps, set Brave's microphone to AppAudioRouter Virtual Microphone and GeForce NOW to your physical microphone. Avoid Automatically in Brave.")
+                    Text("For Brave + GeForce NOW, select BlackHole 2ch explicitly in Brave's site microphone settings; keep GeForce NOW on your physical mic. Avoid Automatically in Brave.")
                         .font(.system(size: 8))
                         .foregroundColor(.secondary.opacity(0.85))
                 }

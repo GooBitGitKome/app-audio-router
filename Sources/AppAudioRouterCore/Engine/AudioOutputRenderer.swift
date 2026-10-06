@@ -13,14 +13,21 @@ public final class AudioOutputRenderer: @unchecked Sendable {
 
     private let lock = NSLock()
     private var sourceBuffers: [UUID: AudioRingBuffer] = [:]
+    private let scratchSampleCapacity = 32_768
+    private let scratchBuffer: UnsafeMutablePointer<Float>
+    private let _renderCallCount = RealtimeAtomicUInt32(0)
 
     public init(deviceID: AudioObjectID, deviceUID: String) {
         self.deviceID = deviceID
         self.deviceUID = deviceUID
+        self.scratchBuffer = .allocate(capacity: scratchSampleCapacity)
+        self.scratchBuffer.initialize(repeating: 0, count: scratchSampleCapacity)
     }
 
     deinit {
         stop()
+        scratchBuffer.deinitialize(count: scratchSampleCapacity)
+        scratchBuffer.deallocate()
     }
 
     public func addSourceBuffer(id: UUID, buffer: AudioRingBuffer) {
@@ -82,13 +89,12 @@ public final class AudioOutputRenderer: @unchecked Sendable {
         self.isRunning = false
     }
 
-    public private(set) var renderCallCount: Int = 0
+    public var renderCallCount: UInt64 {
+        UInt64(_renderCallCount.load())
+    }
 
     private func renderAudio(to outputData: UnsafeMutablePointer<AudioBufferList>) {
-        renderCallCount += 1
-        lock.lock()
-        let buffers = Array(sourceBuffers.values)
-        lock.unlock()
+        _renderCallCount.increment()
 
         let abl = UnsafeMutableAudioBufferListPointer(outputData)
         guard let firstBuf = abl.first, let firstRaw = firstBuf.mData else { return }
@@ -102,18 +108,15 @@ public final class AudioOutputRenderer: @unchecked Sendable {
             // Zero the buffer initially
             vDSP_vclr(destFloat, 1, vDSP_Length(sampleCount))
 
-            if buffers.isEmpty { return }
+            guard sampleCount <= scratchSampleCapacity, lock.try() else { return }
+            defer { lock.unlock() }
 
             let channels = max(1, Int(firstBuf.mNumberChannels))
             let framesToRead = sampleCount / channels
 
-            var temp = [Float](repeating: 0.0, count: sampleCount)
-            for ring in buffers {
-                temp.withUnsafeMutableBufferPointer { tempPtr in
-                    guard let base = tempPtr.baseAddress else { return }
-                    _ = ring.read(frames: framesToRead, into: base)
-                    vDSP_vadd(destFloat, 1, base, 1, destFloat, 1, vDSP_Length(sampleCount))
-                }
+            for ring in sourceBuffers.values {
+                _ = ring.read(frames: framesToRead, into: scratchBuffer)
+                vDSP_vadd(destFloat, 1, scratchBuffer, 1, destFloat, 1, vDSP_Length(sampleCount))
             }
 
             // Clamp mixed output to [-1.0, 1.0] to prevent harsh digital clipping
@@ -131,17 +134,14 @@ public final class AudioOutputRenderer: @unchecked Sendable {
             vDSP_vclr(destL, 1, vDSP_Length(frameCount))
             vDSP_vclr(destR, 1, vDSP_Length(frameCount))
 
-            if buffers.isEmpty { return }
+            guard frameCount * 2 <= scratchSampleCapacity, lock.try() else { return }
+            defer { lock.unlock() }
 
-            var temp = [Float](repeating: 0.0, count: frameCount * 2)
-            for ring in buffers {
-                temp.withUnsafeMutableBufferPointer { tempPtr in
-                    guard let base = tempPtr.baseAddress else { return }
-                    _ = ring.read(frames: frameCount, into: base)
-                    for f in 0..<frameCount {
-                        destL[f] += base[f * 2]
-                        destR[f] += base[f * 2 + 1]
-                    }
+            for ring in sourceBuffers.values {
+                _ = ring.read(frames: frameCount, into: scratchBuffer)
+                for f in 0..<frameCount {
+                    destL[f] += scratchBuffer[f * 2]
+                    destR[f] += scratchBuffer[f * 2 + 1]
                 }
             }
 

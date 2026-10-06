@@ -30,7 +30,7 @@
 | **対象 OS** | macOS 14.2 (Sonoma) 以降 |
 | **アーキテクチャ** | Apple Silicon (arm64) / Intel (x86_64) |
 | **開発言語 / ランタイム** | Swift 5.9+ |
-| **UI フレームワーク** | SwiftUI (MenuBarExtra, Observation) |
+| **UI フレームワーク** | SwiftUI (MenuBarExtra, Observation) + Dock表示の通常アプリ |
 | **低レイヤ API** | CoreAudio, AudioToolbox, AVFoundation, Accelerate (vDSP) |
 | **外部依存ライブラリ** | なし（Pure Apple Frameworks のみで構成） |
 | **必要なシステム権限** | マイクアクセス (`NSMicrophoneUsageDescription`)<br>システムオーディオ収録 (`NSAudioCaptureUsageDescription`) |
@@ -42,7 +42,7 @@
 
 ### 3.1 エフェメラル仮想マイク管理 (Ephemeral Virtual Microphone)
 - **デバイス名**: `AppAudioRouter Virtual Microphone`
-- **デバイスUID**: `com.appaudiorouter.virtualmic.default`（決定論的固定UID。アプリ再起動時にもUIDが不変に保たれ、BraveやChrome等のWebRTCブラウザがデバイストークンを見失って物理マイクへサイレントフォールバックするのを防止）
+- **デバイスUID**: `com.appaudiorouter.virtualmic.default`（固定UID。アプリ再起動でも同じUIDを使う。ただしデバイスが消失・再作成された場合のブラウザの入力選択保持は保証しない）
 - **ライフサイクル**:
   - アプリケーション起動時に、システム内に存在する利用可能なループバックエンジン（BlackHole 優先、次いで ZoomAudioDevice 等）を検出し、それを内包する Aggregate Input Device を動的に生成。
   - OS のオーディオデバイス一覧に正式な入力マイクとして登録され、Chrome, Brave, Zoom, Teams 等のブラウザやアプリから選択可能となる。
@@ -72,6 +72,17 @@
   - リアルタイムピークメーター表示（0.0 〜 1.0）。
   - メーター更新自体の ON / OFF 切替ボタン（不要時の描画負荷低減）。
 
+### 3.2.1 Brave と GeForce NOW の入力分離
+- macOS の標準入力は物理マイクに保ち、アプリは標準入力を自動変更しない。
+- GeForce NOW は物理マイクを使い、Brave の Gemini サイト入力は `BlackHole 2ch` を明示選択する。`Automatically` ではブラウザが選ぶ入力先を本アプリから固定できない。
+- Brave が BlackHole を列挙できない場合は `AppAudioRouter Virtual Microphone` を明示選択できるが、ブラウザ側で選択が保持される保証はない。
+- `watch-input` は macOS 標準入力と AppAudioRouter 仮想マイクの変更を記録する診断機能であり、Brave のサイト別デバイス選択や CPU 使用プロセスは取得しない。
+- `watch-input` は全音声デバイスの UID・ID・チャンネル数・公称サンプルレート・標準入出力の変更と消失を500ms間隔で比較して記録する。BlackHoleやBluetoothデバイスの変化も対象。変更元プロセスの特定や、500ms未満の一時的変化の捕捉は保証しない。
+- [FACT] 専用仮想マイクは固定UIDとAggregate/Input属性で識別する。一般の `Combined Microphones` や同名の別デバイスを専用仮想マイクとして扱わない。Master Inputには現在の標準入力を必ず表示する。
+- [FACT] 他プロセスが作成した専用仮想マイクを再利用しても所有権は取得しない。通常終了時に破棄できるのは自プロセスが作成したデバイスのみ。CLIの明示的な `cleanup-virtual-mic` は固定UIDのデバイスを削除する。
+- [UNKNOWN] GFN起動によるBraveの入力切替の直接原因は、同時刻のOSデバイス変更とブラウザの実入力トラックを照合するまで未確定。固定UIDや優先デバイス設定だけで切替防止を保証しない。
+- BraveでChatGPT/GeminiのWeb音声会話を使用する場合は、任意の `BrowserExtension` を読み込むと `getUserMedia()` の音声要求をBlackHoleまたはAppAudioRouter Virtual Microphoneの `deviceId: exact` に固定できる。対象仮想入力が見つからない場合、OS標準入力へフォールバックせずエラーにする。macOSの標準入力、GFN、他サイトの入力先は変更しない。
+
 ### 3.3 物理マイク管理・ミキシング (Microphone Mixer)
 - **検知**: システムに接続されている純粋な物理マイク（内蔵マイク、USB マイク、オーディオインターフェース等）を自動列挙。
 - **個別制御**:
@@ -96,20 +107,21 @@
 ### 3.5 機器セットの自動生成 (Aggregate Devices)
 - **Multi-Output Device**: 複数の出力デバイスを選択し、同一の音声をミラーリング再生する機器セットを CoreAudio HAL レベルで即座に生成。
 - **Aggregate Microphone**: 複数のマイクを選択し、1 つのマルチチャンネル入力マイクとして束ねる機器セットを生成。
+- 構成に指定されたUIDがデバイス一覧に存在しない、または別のAggregate Deviceである場合は作成に失敗する。一部の構成だけで作成を続行しない。
 
 ---
 
 ## 4. 非機能要件 (Non-Functional Requirements)
 
 1. **超低レイテンシ・リアルタイム性**:
-   - オーディオコールバック内での排他制御には `os_unfair_lock` を使用し、優先度逆転やブロッキングを防止。
+   - IOProc 内では動的メモリ確保と待機ロックを行わない。AudioRingBuffer の競合時は入力ブロックを破棄するか、出力を無音にして callback の待ち時間を抑える。
    - `AudioRingBuffer` による循環バッファリングにより、最短レイテンシでストリームを転送。
 2. **音質保護・クリッピング防止**:
    - 複数ストリームのミックス時、Accelerate フレームワークの `vDSP_vclip` を用いて `[-1.0, 1.0]` の範囲へ安全にクランプ。デジタル歪みの発生を抑制。
-   - バッファオーバーフロー時は最古のフレームを安全に破棄し、ストリームの継続性を最優先。
+   - バッファオーバーフロー時は最古のフレームを破棄する。ロック競合時にも短い音切れが起きる可能性がある。
 3. **メモリ・リソース効率**:
    - メニューバー常駐ツールとして最小限のフットプリント（メモリ数十 MB 程度）。
-   - 不要なポーリングを排除し、CoreAudio プロパティリスナーおよび通知駆動の設計。
+   - デバイス/プロセス一覧は CoreAudio プロパティリスナーおよび Workspace 通知で更新する。レベルメーターは 50ms 間隔で UI に反映する。
 
 ---
 

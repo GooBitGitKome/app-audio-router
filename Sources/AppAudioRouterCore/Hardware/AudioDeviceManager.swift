@@ -346,6 +346,18 @@ public final class AudioDeviceManager: @unchecked Sendable {
             DispatchQueue.global(qos: .utility),
             listenerBlock
         )
+
+        var defaultInAddress = AudioObjectPropertyAddress(
+            mSelector: AudioHardwarePropertyID(kAudioHardwarePropertyDefaultInputDevice),
+            mScope: AudioObjectPropertyScope(kAudioObjectPropertyScopeGlobal),
+            mElement: AudioObjectPropertyElement(kAudioObjectPropertyElementMain)
+        )
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultInAddress,
+            DispatchQueue.global(qos: .utility),
+            listenerBlock
+        )
     }
 
     private func removeListeners() {
@@ -358,6 +370,29 @@ public final class AudioDeviceManager: @unchecked Sendable {
         AudioObjectRemovePropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &devicesAddress,
+            DispatchQueue.global(qos: .utility),
+            block
+        )
+
+        var defaultOutAddress = AudioObjectPropertyAddress(
+            mSelector: AudioHardwarePropertyID(kAudioHardwarePropertyDefaultOutputDevice),
+            mScope: AudioObjectPropertyScope(kAudioObjectPropertyScopeGlobal),
+            mElement: AudioObjectPropertyElement(kAudioObjectPropertyElementMain)
+        )
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultOutAddress,
+            DispatchQueue.global(qos: .utility),
+            block
+        )
+        var defaultInAddress = AudioObjectPropertyAddress(
+            mSelector: AudioHardwarePropertyID(kAudioHardwarePropertyDefaultInputDevice),
+            mScope: AudioObjectPropertyScope(kAudioObjectPropertyScopeGlobal),
+            mElement: AudioObjectPropertyElement(kAudioObjectPropertyElementMain)
+        )
+        AudioObjectRemovePropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultInAddress,
             DispatchQueue.global(qos: .utility),
             block
         )

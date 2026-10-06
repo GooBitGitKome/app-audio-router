@@ -16,7 +16,7 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
 
     private let lock = NSLock()
     private var _state: TestState = .idle
-    private var _recordPeakLevel: Float = 0.0
+    private let recordPeakBits = RealtimeAtomicUInt32(0)
     private var _playbackPeakLevel: Float = 0.0
 
     public var state: TestState {
@@ -24,7 +24,7 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
     }
 
     public var recordPeakLevel: Float {
-        get { lock.lock(); defer { lock.unlock() }; return _recordPeakLevel }
+        Float(bitPattern: recordPeakBits.load())
     }
 
     public var playbackPeakLevel: Float {
@@ -39,6 +39,9 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
     private let ioQueue = DispatchQueue(label: "com.appaudiorouter.tester.input", qos: .userInteractive)
 
     private var recordedSamples: [Float] = []
+    private var recordingBuffer: UnsafeMutablePointer<Float>?
+    private var recordingBufferCapacity = 0
+    private var recordedSampleCount = 0
     private var recordedSampleRate: Double = 48000.0
     private var recordTimer: DispatchSourceTimer?
     private var recordStartTime: Date?
@@ -57,6 +60,7 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
     deinit {
         stopRecording()
         stopPlayback()
+        recordingBuffer?.deallocate()
     }
 
     // MARK: - Target Device Resolution
@@ -66,7 +70,7 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
         let allDevs = AudioDeviceManager.shared.refreshDevices()
 
         // 1. AppAudioRouter Virtual Microphone
-        if let virtMic = allDevs.first(where: { $0.isInput && $0.name == AggregateDeviceManager.virtualMicDeviceName }) {
+        if let virtMic = allDevs.first(where: \.isAppVirtualMicrophone) {
             return virtMic.id
         }
 
@@ -102,8 +106,13 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
         self.recordedSamples.removeAll(keepingCapacity: true)
         self.recordedSampleRate = sampleRate
         self.targetDuration = max(1.0, min(duration, 30.0))
+        let capacity = Int(sampleRate * targetDuration * 2.0) + 16_384
+        recordingBuffer?.deallocate()
+        recordingBuffer = .allocate(capacity: capacity)
+        recordingBufferCapacity = capacity
+        recordedSampleCount = 0
         self.recordStartTime = Date()
-        self._recordPeakLevel = 0.0
+        self.recordPeakBits.store(0)
         self._state = .recording(elapsed: 0.0, maxDuration: targetDuration)
         lock.unlock()
 
@@ -166,11 +175,24 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
             self.ioProcID = nil
         }
 
+        let sampleCount = recordedSampleCount
+        let capturedSamples: [Float]
+        if let recordingBuffer, sampleCount > 0 {
+            capturedSamples = Array(UnsafeBufferPointer(start: recordingBuffer, count: sampleCount))
+        } else {
+            capturedSamples = []
+        }
+        recordingBuffer?.deallocate()
+        recordingBuffer = nil
+        recordingBufferCapacity = 0
+        recordedSampleCount = 0
+
         lock.lock()
+        self.recordedSamples = capturedSamples
         let samples = self.recordedSamples
         let rate = self.recordedSampleRate
         let actualDuration = Double(samples.count) / (rate * 2.0)
-        self._recordPeakLevel = 0.0
+        self.recordPeakBits.store(0)
         lock.unlock()
 
         guard actualDuration >= 0.2, let fileURL = testAudioFileURL else {
@@ -217,19 +239,18 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
             lock.lock()
             self._state = .recording(elapsed: elapsed, maxDuration: targetDuration)
             lock.unlock()
+            onPeakUpdate?(recordPeakLevel)
             notifyState()
         }
     }
 
     private func handleCapturedBuffer(_ bufferList: UnsafePointer<AudioBufferList>) {
         let peak = AudioBufferProcessor.calculatePeakLevel(from: bufferList)
-        lock.lock()
-        self._recordPeakLevel = peak
-        lock.unlock()
-        onPeakUpdate?(peak)
+        recordPeakBits.store(peak.bitPattern)
 
         let abl = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList))
         guard let firstBuf = abl.first, let firstRaw = firstBuf.mData else { return }
+        guard let destination = recordingBuffer else { return }
 
         if abl.count == 1 {
             let channelCount = max(1, Int(firstBuf.mNumberChannels))
@@ -237,46 +258,28 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
             guard frameCount > 0 else { return }
 
             let floatPtr = firstRaw.bindMemory(to: Float.self, capacity: frameCount * channelCount)
-            if channelCount == 1 {
-                // Expand mono to stereo
-                var stereo = [Float](repeating: 0, count: frameCount * 2)
-                for i in 0..<frameCount {
-                    let s = floatPtr[i]
-                    stereo[i * 2] = s
-                    stereo[i * 2 + 1] = s
-                }
-                lock.lock()
-                recordedSamples.append(contentsOf: stereo)
-                lock.unlock()
-            } else if channelCount == 2 {
-                lock.lock()
-                recordedSamples.append(contentsOf: UnsafeBufferPointer(start: floatPtr, count: frameCount * 2))
-                lock.unlock()
-            } else {
-                // Multi-channel (> 2): cleanly extract stereo channels 0 and 1
-                var stereo = [Float](repeating: 0, count: frameCount * 2)
-                for i in 0..<frameCount {
-                    stereo[i * 2] = floatPtr[i * channelCount]
-                    stereo[i * 2 + 1] = floatPtr[i * channelCount + 1]
-                }
-                lock.lock()
-                recordedSamples.append(contentsOf: stereo)
-                lock.unlock()
+            let framesToCopy = min(frameCount, max(0, (recordingBufferCapacity - recordedSampleCount) / 2))
+            guard framesToCopy > 0 else { return }
+            for i in 0..<framesToCopy {
+                let left = floatPtr[i * channelCount]
+                let right = channelCount == 1 ? left : floatPtr[i * channelCount + 1]
+                destination[recordedSampleCount + i * 2] = left
+                destination[recordedSampleCount + i * 2 + 1] = right
             }
+            recordedSampleCount += framesToCopy * 2
         } else if abl.count >= 2 {
             let frameCount = Int(firstBuf.mDataByteSize) / MemoryLayout<Float>.size
             guard frameCount > 0, let secondRaw = abl[1].mData else { return }
             let floatPtrL = firstRaw.bindMemory(to: Float.self, capacity: frameCount)
             let floatPtrR = secondRaw.bindMemory(to: Float.self, capacity: frameCount)
 
-            var stereo = [Float](repeating: 0, count: frameCount * 2)
-            for i in 0..<frameCount {
-                stereo[i * 2] = floatPtrL[i]
-                stereo[i * 2 + 1] = floatPtrR[i]
+            let framesToCopy = min(frameCount, max(0, (recordingBufferCapacity - recordedSampleCount) / 2))
+            guard framesToCopy > 0 else { return }
+            for i in 0..<framesToCopy {
+                destination[recordedSampleCount + i * 2] = floatPtrL[i]
+                destination[recordedSampleCount + i * 2 + 1] = floatPtrR[i]
             }
-            lock.lock()
-            recordedSamples.append(contentsOf: stereo)
-            lock.unlock()
+            recordedSampleCount += framesToCopy * 2
         }
     }
 
@@ -373,7 +376,11 @@ public final class VirtualInputTester: NSObject, @unchecked Sendable, AVAudioPla
 
         lock.lock()
         self.recordedSamples.removeAll()
-        self._recordPeakLevel = 0.0
+        self.recordingBuffer?.deallocate()
+        self.recordingBuffer = nil
+        self.recordingBufferCapacity = 0
+        self.recordedSampleCount = 0
+        self.recordPeakBits.store(0)
         self._playbackPeakLevel = 0.0
         self._state = .idle
         lock.unlock()

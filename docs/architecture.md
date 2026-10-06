@@ -10,7 +10,7 @@ AppAudioRouter は、Swift Package Manager によるモジュール分割設計�
 
 ```mermaid
 graph TD
-    App["AppAudioRouterApp (SwiftUI MenuBarExtra)"] --> AppState["AppState (Observation)"]
+    App["AppAudioRouterApp (Dock app + SwiftUI MenuBarExtra)"] --> AppState["AppState (Observation)"]
     AppState --> Core["AppAudioRouterCore (Framework)"]
     CLI["AppAudioRouterCLI (Command-Line Tool)"] --> Core
 
@@ -105,6 +105,17 @@ sequenceDiagram
   - 同じUIDと同じループバックサブデバイスを持つ既存 Aggregate Input Device は再利用する。それ以外の古い同名または同UIDデバイスを破棄して作り直す。
   - ChromiumのAUHAL層が集約デバイスの入力を拒否する環境向けに、基底ループバックドライバ（`BlackHole 2ch`）への直接接続パスを案内。
 
+### 3.5 仮想マイクの識別と所有権
+- UIと録音テスターは `AudioDevice.isAppVirtualMicrophone` を共有し、固定UID・Aggregate・入力属性を照合する。一般の集約マイクのUIDプレフィックスや表示名では識別しない。
+- 再利用判定は `kAudioAggregateDevicePropertyFullSubDeviceList` の設定済みUIDで行う。ActiveSubDeviceListの一時的な欠落を構成変更として扱わない。
+- 再利用した他プロセスのデバイスは `managedDeviceIDs` に追加せず、通常のクリーンアップでは破棄しない。他プロセスの異なる構成を自動的に再作成しない。
+- `watch-input` はデバイス全体のスナップショットを比較する診断。ブラウザ内部の選択や変更元プロセスは観測できない。
+
+### 3.6 Braveのサイト別マイク固定
+- 任意の `BrowserExtension` は ChatGPT/Gemini origin の `document_start` に MAIN world content script を注入する。
+- ページの `getUserMedia()` が音声を要求した場合に限り、許可済みデバイス一覧から BlackHole 2ch、次いでAppAudioRouter Virtual Microphoneを検索し、その origin用のIDを `deviceId: { exact: ... }` として渡す。
+- 対象が列挙されない場合は `NotFoundError` で止める。物理入力やOS既定入力には切り替えない。Braveで開発者モードを使った読み込みが必要で、アプリ本体への組み込みは行わない。
+
 ---
 
 ## 4. クラス関係図 (Class Relationships)
@@ -187,5 +198,7 @@ classDiagram
    従来の BlackHole 単体や kext を用いた方式と異なり、OS が公式に提供するセキュアなプロセスキャプチャ API を使用。SIP 無効化不要。
 3. **Accelerate (vDSP)**:
    ゲイン調整（`vDSP_vsmul`）、バッファ加算（`vDSP_vadd`）、クリッピング（`vDSP_vclip`）、VU ピーク検出（`vDSP_maxmgv`）に SIMD 高速演算を活用し、CPU 負荷を極小化。
-4. **`os_unfair_lock` によるリングバッファ**:
-   リアルタイムオーディオコンテキスト（IOProc）内では、Objective-C ランタイムのロックや `NSLock` によるブロッキングを避け、低オーバーヘッドな低水準スピンロックを採用。
+4. **リングバッファの競合処理**:
+   `AudioRingBuffer` は IOProc から `os_unfair_lock_trylock` を使い、競合時は待たずに書き込みブロックを破棄するか、読み出し先を無音にする。制御操作の `clear()` は通常ロックを使うため、短い競合では音声ブロックが欠落する可能性がある。
+5. **IOProc の作業量**:
+   バッファと Atomic 状態はコールバック外で確保する。メーター通知は 50ms タイマーから UI へ渡し、デバイス・プロセス一覧の全件更新は 1.5 秒ごとに行わず CoreAudio/Workspace 通知で行う。

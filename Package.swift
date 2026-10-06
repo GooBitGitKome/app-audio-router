@@ -23,8 +23,14 @@ let package = Package(
     dependencies: [],
     targets: [
         .target(
+            name: "AppAudioRouterRealtime",
+            path: "Sources/AppAudioRouterRealtime",
+            publicHeadersPath: "include",
+            cSettings: [.unsafeFlags(["-std=c11"])]
+        ),
+        .target(
             name: "AppAudioRouterCore",
-            dependencies: [],
+            dependencies: ["AppAudioRouterRealtime"],
             path: "Sources/AppAudioRouterCore"
         ),
         .executableTarget(

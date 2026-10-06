@@ -14,10 +14,10 @@ open AppAudioRouter.app
 起動すると、macOS のメニューバー（画面右上の時計や Wi-Fi の並び）に波形アイコン（`waveform.circle.fill`）が表示されます。
 
 > [!NOTE]
-> AppAudioRouter はメニューバー常駐アプリ（Dock に表示されない Accessory アプリ）です。
+> AppAudioRouter はメニューバーから操作でき、Dockにも表示される通常のmacOSアプリです。Dockアイコンを右クリックし「オプション」>「Dockに追加」で固定できます。
 
 ### 1.2 終了
-メニューバーの波形アイコンをクリックし、ポップオーバー最下部の **「Quit」** ボタンをクリックします。
+メニューバーの波形アイコンをクリックし、ポップオーバー最下部の **「Quit」** ボタンをクリックします。Dockアイコンの右クリックメニューから終了することもできます。
 アプリが終了すると、公開されていた `AppAudioRouter Virtual Microphone` は OS から自動的に削除・クリーンアップされます。
 
 ---
@@ -83,10 +83,19 @@ Mac 上で鳴っているすべての音（YouTube, BGM, ゲーム音, 効果音
 > YouTube と Gemini Live を同じブラウザで再生すると、どちらの音も同じタップ対象になります。YouTube を Safari、Gemini Live を Chrome に分け、除外一覧で Chrome を選ぶと、YouTube の音声を送りつつ Gemini の返答を取り込まない設定にできます。Chrome の Go Live 入力には BlackHole 2ch を選びます。
 
 ### 3.2 Brave と GeForce NOW で別々のマイクを使う
-1. AppAudioRouter で **Desktop Audio to Virtual Mic** を OFF にしている場合でも、`AppAudioRouter Virtual Microphone` は物理マイクを含まない仮想入力として選択できます。デスクトップ音声を Brave に渡す場合はルーティングを ON にします。
-2. Brave のサイトまたはブラウザのマイク選択で **`AppAudioRouter Virtual Microphone`** を明示的に選択し、**Automatically** は選ばないでください。アプリは macOS の標準入力を変更しません。
-3. GeForce NOW の macOS アプリの音声設定では、利用する **物理マイク** を明示的に選択します。
-4. これにより Brave は AppAudioRouter の仮想入力、GeForce NOW は物理入力を個別に使います。macOS のアプリ別マイク選択と Brave のサイト権限画面は OS / ブラウザ版により表示が異なる場合があります。
+1. macOS の標準入力は利用する **物理マイク** に設定します。AppAudioRouter は標準入力を自動変更しません。
+2. Brave のGeminiサイトのマイク選択で **`BlackHole 2ch`** を明示的に選択し、**Automatically** は選ばないでください。Geminiへデスクトップ音声を送る間はAppAudioRouterのDesktop Audio to Virtual MicをONにします。
+3. GeForce NOWでは物理マイクを使います。GFN側に入力デバイス選択がない場合は、macOS標準入力の物理マイクを使う前提にします。
+4. Braveで `BlackHole 2ch` が選べず、`AppAudioRouter Virtual Microphone` のみ表示される場合はそちらを明示選択できます。ただし入力デバイスの切断や再作成が起きるとブラウザ側で再選択が必要なことがあります。
+5. GFNを起動する前後でBraveの選択先が変わる場合は、その時点のBrave入力表示とmacOS標準入力を確認してください。アプリはBraveのサイト選択を外部から固定できません。
+
+入力デバイスの変更を記録するには、ターミナルで `swift run AppAudioRouterCLI watch-input 300` を実行します。GFNの起動・終了時刻と出力ログを照合してください。CPU負荷が上がった場合は Activity Monitor でプロセス名を確認してください。このコマンドはブラウザ内部のサイト選択や CPU 使用率を読み取るものではありません。
+
+GFN起動中もChatGPT/GeminiのWeb会話にBlackHoleを固定するには、[BrowserExtension/README.md](../BrowserExtension/README.md)の手順でBrave拡張を読み込みます。ChatGPT/Geminiのサイト設定でマイクを許可してからページを再読み込みしてください。会話開始時、開発者ツールのConsoleに `Voice capture pinned to: BlackHole 2ch` と表示されれば固定済みです。BlackHoleが使えない時は既定マイクへ逃がさずエラーを表示します。
+
+ログにはBlackHoleやBluetooth機器の追加・消失、デバイスID、サンプルレート、標準入出力も表示されます。Braveで切り替わった時刻と照合すると、OS標準入力の変更とデバイスの再接続を区別できます。OS側に変更がなければ、Braveの `brave://webrtc-internals` を開いてからGeminiの音声入力を開始し、getUserMediaの制約と選択された音声トラックを確認する必要があります。
+
+ソースを修正した後は `./scripts/package_app.sh` を実行し、このリポジトリ直下の `AppAudioRouter.app` を起動してください。`swift build` だけでは既存の `.app` は更新されません。
 
 ### 3.3 Zoom で利用する場合
 1. Zoom の「設定」>「オーディオ」を開きます。
