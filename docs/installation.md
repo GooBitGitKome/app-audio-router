@@ -20,7 +20,7 @@
 
 ## 2. ダウンロード版をインストールする
 
-配布ZIP `AppAudioRouter-macOS.zip` を展開し、フォルダ内の `AppAudioRouter.app` を `/Applications` にコピーして起動します。アプリはメニューバーとDockの両方に表示されます。
+配布ZIP `AppAudioRouter-macOS.zip` を展開し、フォルダ内の `AppAudioRouter.app` を `/Applications` にコピーして起動します。カスタム音声ルーティングアイコンのアプリが、メニューバーとDockの両方に表示されます。
 
 1. `AppAudioRouter.app` を `/Applications` へドラッグします。
 2. `/Applications/AppAudioRouter.app` を開き、初回のマイク・システムオーディオ権限を許可します。

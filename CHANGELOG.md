@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App now appears in the Dock as a regular macOS application while retaining the menu bar controls and Quit action.
 - Added a release packaging script that creates a downloadable ZIP containing the app, Brave extension, and Japanese installation guide.
 
+### Added
+- Added a custom audio-routing app icon to the Dock and packaged application.
+
 ### Fixed
 - Added an optional Brave extension that pins ChatGPT/Gemini `getUserMedia()` audio requests to BlackHole or AppAudioRouter Virtual Microphone with an exact device ID, preventing an automatic fallback to GFN's current physical/default input.
 - Aggregate creation now rejects missing or nested aggregate subdevices instead of accepting stale tap UIDs or silently dropping invalid members. `diagnose` reports unavailable members of the current default input.

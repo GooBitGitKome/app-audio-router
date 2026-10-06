@@ -31,6 +31,8 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
     <string>AppAudioRouter</string>
     <key>CFBundleDisplayName</key>
     <string>AppAudioRouter</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -50,6 +52,8 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+"$SCRIPT_DIR/create_app_icon.sh" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
 echo "==> Signing app bundle with ad-hoc signature..."
 codesign --force --deep --sign - "$APP_BUNDLE"
