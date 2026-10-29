@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- Recorded the 2026-10-29 Brave / GeForce NOW microphone recovery, distinguishing observed physical-device reacquisition from the inferred stale-page cause, with rebuild requirements, extension/tab reload steps, and actual-track verification.
+
+### Mic Lock toggle
+- Added a persistent ON/OFF toolbar popup in Mic Lock 1.2.0, with live settings propagation and audio shutdown on mode changes. OFF restores the site's normal microphone selection; reconnect voice after switching.
+
+
+### Browser input separation
+- Mic Lock 1.1.0 verifies returned audio tracks, blocks physical fallback, resolves IDs again on reconnection, and covers related frames.
+
+
+### Rust audio test and readability fixes
+- Moved audio tests/status ahead of advanced settings, enlarged text and controls, added an adaptive background, and labeled the menu bar item Audio.
+- Added an in-app desktop-route test that plays a system sound only after actual input buffers arrive; recordings use the active loopback input.
+- Recording enabled sources now explains missing routes, detects effectively silent captures, and avoids automatically playing silence as a successful test.
+- Showed playback destination and microphone sample-rate incompatibility beside controls; preserved scroll position during control updates.
+- Added recording reports/readiness to the Rust worker interface and regression tests for empty routes, muted tests, target selection, silence, and physical microphone frame delivery.
+
+
+### Rust migration preview
+- Added a Cargo workspace with a preallocated Rust audio core, native CoreAudio backend, compatible CLI command names/aliases, and AppKit menu bar/Dock application.
+- Added Rust unit, concurrent-buffer, synthetic IOProc, zero-allocation, and explicitly opt-in hardware tests, plus Rust CI checks.
+- Added opt-in `AAR_BACKEND=rust` app/release packaging while preserving Swift as the default pending hardware and UI validation.
+- Preserved fixed virtual-mic identity, self-exclusion, borrowed-device ownership, exclusion preferences, and browser extension packaging. Rust rejects unresolved self-exclusion and unverified/incompatible capture clocks; runtime parity and performance gains remain unverified.
+
+
+### Reliability
+- Detach obsolete process-output consumers when changing routing destinations.
+- Verify tap aggregate nominal sample rates and reject unverified clocks.
+
 ### Changed
 - App now appears in the Dock as a regular macOS application while retaining the menu bar controls and Quit action.
 - Added a release packaging script that creates a downloadable ZIP containing the app, Brave extension, and Japanese installation guide.

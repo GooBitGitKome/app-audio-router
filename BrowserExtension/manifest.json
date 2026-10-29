@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AppAudioRouter Mic Lock",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Routes ChatGPT and Gemini browser voice capture to the AppAudioRouter loopback microphone.",
   "host_permissions": [
     "https://chatgpt.com/*",
@@ -15,10 +15,34 @@
         "https://chat.openai.com/*",
         "https://gemini.google.com/*"
       ],
-      "js": ["mic-lock.js"],
+      "js": [
+        "settings-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "mic-lock.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN",
-      "all_frames": true
+      "all_frames": true,
+      "match_origin_as_fallback": true
     }
-  ]
+  ],
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AppAudioRouter Mic Lock \u2014 ON/OFF"
+  }
 }

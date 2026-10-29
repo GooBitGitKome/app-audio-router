@@ -1,0 +1,4 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>Mic Lock</title>
+<style>body{font:14px system-ui;width:280px;padding:16px;color-scheme:light dark}label{display:flex;gap:12px;align-items:center;font-size:18px}input{width:22px;height:22px}p{line-height:1.6}#status{font-weight:600}</style></head>
+<body><h2>AppAudioRouter Mic Lock</h2><label><input id="enabled" type="checkbox" role="switch" disabled>入力固定 <span id="state">…</span></label><p id="status" role="status"></p><p>ON：ChatGPT/Geminiを仮想マイクに固定。<br>OFF：サイト通常のマイク選択を使用。</p><p>切替時に取得済みの音声入力を停止します。会話を再接続してください。ゲームのマイク設定は変更しません。</p><script src="popup.js"></script></body></html>

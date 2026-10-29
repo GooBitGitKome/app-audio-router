@@ -6,9 +6,21 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "==> Building AppAudioRouter in release mode..."
 cd "$PROJECT_DIR"
-swift build -c release --product AppAudioRouterApp
-
-BIN_PATH="$PROJECT_DIR/.build/release/AppAudioRouterApp"
+BACKEND="${AAR_BACKEND:-swift}"
+case "$BACKEND" in
+    swift)
+        swift build -c release --product AppAudioRouterApp
+        BIN_PATH="$PROJECT_DIR/.build/release/AppAudioRouterApp"
+        ;;
+    rust)
+        cargo build --release --locked --bin AppAudioRouterApp --bin AppAudioRouterCLI
+        BIN_PATH="$PROJECT_DIR/target/release/AppAudioRouterApp"
+        ;;
+    *)
+        echo "Unknown AAR_BACKEND: $BACKEND (expected swift or rust)" >&2
+        exit 2
+        ;;
+esac
 APP_BUNDLE="$PROJECT_DIR/AppAudioRouter.app"
 
 echo "==> Creating macOS App Bundle at $APP_BUNDLE..."
@@ -52,6 +64,13 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
 </dict>
 </plist>
 EOF
+
+if [ "$BACKEND" = rust ]; then
+    cp "$PROJECT_DIR/target/release/AppAudioRouterCLI" "$APP_BUNDLE/Contents/MacOS/AppAudioRouterCLI"
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 2.0.0' "$APP_BUNDLE/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Add :AARReleaseChannel string rust-preview' "$APP_BUNDLE/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion 3' "$APP_BUNDLE/Contents/Info.plist"
+fi
 
 "$SCRIPT_DIR/create_app_icon.sh" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 

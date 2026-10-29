@@ -1,5 +1,7 @@
 # AppAudioRouter
 
+**Rust migration preview:** A Cargo workspace now provides a native Rust audio backend, CLI, and AppKit application. Swift remains the default until hardware/UI acceptance passes. See [Rust build and migration status](docs/rust-migration.md).
+
 macOS 14.2+ (Sonoma / Sequoia) 向けのメニューバー常駐型オーディオルーター＆ミキサーです。  
 デスクトップ全体の再生音声と複数の物理マイク音声をリアルタイムにミキシングし、通話・配信アプリ（Zoom、Brave、Discord、Google Meet、Teams等）から直接選択できる一時的な仮想入力マイク（`AppAudioRouter Virtual Input`）へ送出します。
 
@@ -90,6 +92,7 @@ macOS 14.2+ (Sonoma / Sequoia) 向けのメニューバー常駐型オーディ�
 - [アーキテクチャ設計書 (docs/architecture.md)](docs/architecture.md) - コンポーネント構成、Mermaidデータフロー図、リアルタイムオーディオ安全性
 - [インストール・環境構築ガイド (docs/installation.md)](docs/installation.md) - 前提環境、ビルド手順、権限設定、トラブルシューティング
 - [利用マニュアル (docs/usage.md)](docs/usage.md) - 一般ユーザー向け操作方法、Brave/Zoom設定手順
+- [Brave・GeForce NOWのマイク分離と復旧記録](docs/brave-gfn-microphone-recovery.md) - 原因の確認結果、更新・作り直し時の復旧手順と実機確認
 - [開発者ガイド (docs/development.md)](docs/development.md) - 開発手順、テスト実行、CoreAudioリアルタイムスレッドの制約
 - [バージョニング方針 (docs/versioning.md)](docs/versioning.md) - SemVer 2.0.0 運用基準
 - [リリース手順書 (docs/release-process.md)](docs/release-process.md) - リリース前チェックリスト、タグ打ち、配布手順

@@ -64,3 +64,7 @@ After modifying code:
    - Update `docs/specification.md` if behavior changed.
    - Update `docs/architecture.md` if components or data flows changed.
    - Update `CHANGELOG.md` under `[Unreleased]` for user-visible changes.
+
+## Rust coexistence
+
+For changes under `crates/`, read `docs/rust-migration.md`, run Cargo formatting, Clippy and workspace tests, and retain the Swift checks during migration. Use `AAR_BACKEND=rust ./scripts/package_app.sh` for Rust artifact changes. Hardware acceptance is opt-in and serial; do not disturb another instance's virtual microphone. Do not remove Swift or change the default backend before the documented hardware/UI gates pass. Rust callbacks obey the same no-allocation/no-wait rules as Swift callbacks. The `objc2` binding family and CLI `libc` signal handling are approved migration dependencies; additional dependencies require technical justification.

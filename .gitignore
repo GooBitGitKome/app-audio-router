@@ -6,3 +6,6 @@ DerivedData/
 *.xcworkspace
 AppAudioRouter.app/
 dist/
+
+# Rust build artifacts
+/target/

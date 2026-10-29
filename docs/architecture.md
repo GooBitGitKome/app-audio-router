@@ -202,3 +202,19 @@ classDiagram
    `AudioRingBuffer` は IOProc から `os_unfair_lock_trylock` を使い、競合時は待たずに書き込みブロックを破棄するか、読み出し先を無音にする。制御操作の `clear()` は通常ロックを使うため、短い競合では音声ブロックが欠落する可能性がある。
 5. **IOProc の作業量**:
    バッファと Atomic 状態はコールバック外で確保する。メーター通知は 50ms タイマーから UI へ渡し、デバイス・プロセス一覧の全件更新は 1.5 秒ごとに行わず CoreAudio/Workspace 通知で行う。
+
+## Parallel Rust implementation
+
+The migration uses four Cargo crates: `router-core` for platform-independent DSP/rings/atomic controls; `router-macos` for HAL ownership, process taps, IOProc routing and recording/playback; and `router-app`/`router-cli` as native frontends. Both frontends use the same backend. AppKit and route configuration stay on the main/control thread. Recording uses a cancellable worker and bounded callback buffers. HAL property listeners only mark an atomic dirty flag; Workspace launch/termination notifications mark a pending refresh, and the app refreshes snapshots outside listeners. Meter values are sampled at 50ms and visual updates pause while the popover is closed.
+
+The real-time ring is protected by a single-attempt atomic gate, not a waiting spin loop. Renderer membership uses non-waiting `try_lock`. Callback memory is retained if HAL unregistration fails, preferring an explicit exceptional leak over a use-after-free. Global taps fail closed if self-exclusion cannot be resolved. Resource owners unregister IO before destroying tap aggregates and taps. The stable Swift pipeline remains available for comparison and is still the packaging default. See [Rust migration](rust-migration.md).
+
+### Rust test preparation and feedback
+
+The recording worker waits for the first received input block before publishing its atomic readiness flag. The main-thread test controller then starts the external system-sound player for an explicit desktop-route test. The worker accumulates recording peak and duration outside IOProc and returns a recording report. UI completion distinguishes an audible signal from silence before in-process playback, and exposes errors near the top of the panel. The external player is reaped/cancelled on test completion, reset, and shutdown. Audio callback allocation/wait constraints and self-exclusion remain unchanged.
+
+### Browser track validation
+The extension verifies native getUserMedia results before returning them and monitors device changes for locked streams. This does not change macOS default input or capture the physical game microphone.
+
+### Extension toggle
+The popup stores the enabled flag through the extension storage API. An isolated content script publishes settings to the MAIN-world microphone wrapper with an initial handshake. The wrapper gates acquisition until initialization and tracks a mode generation to reject stale results. Audio tracks acquired in either mode are stopped on transitions; video-only requests pass through.

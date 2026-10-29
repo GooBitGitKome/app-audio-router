@@ -680,6 +680,15 @@ public final class AudioRoutingEngine: @unchecked Sendable {
     // MARK: - Renderer Assignment
 
     private func updateRoutingForSession(_ session: ActiveSession) {
+        // Remove obsolete consumers before attaching the new destination. A ring
+        // has one read cursor and cannot be shared between output renderers.
+        lock.lock()
+        let obsoleteRenderers = renderers.filter { $0.key != session.state.targetDeviceUID }.map(\.value)
+        lock.unlock()
+        for renderer in obsoleteRenderers {
+            renderer.removeSourceBuffer(id: session.sessionUUID)
+        }
+
         // Target Output Device
         if let targetUID = session.state.targetDeviceUID {
             if let renderer = getOrCreateRenderer(deviceUID: targetUID) {

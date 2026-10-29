@@ -57,7 +57,17 @@ public final class TapAggregateDevice: @unchecked Sendable {
                 mScope: kAudioObjectPropertyScopeGlobal,
                 mElement: kAudioObjectPropertyElementMain
             )
-            _ = AudioObjectSetPropertyData(newDeviceID, &rateAddr, 0, nil, UInt32(MemoryLayout<Float64>.size), &rate)
+            let setStatus = AudioObjectSetPropertyData(newDeviceID, &rateAddr, 0, nil, UInt32(MemoryLayout<Float64>.size), &rate)
+            var actualRate: Float64 = 0
+            var size = UInt32(MemoryLayout<Float64>.size)
+            let readStatus = AudioObjectGetPropertyData(newDeviceID, &rateAddr, 0, nil, &size, &actualRate)
+            // A failed write is harmless only when the device already has the
+            // requested rate. Never publish an unverified capture clock.
+            guard readStatus == noErr, abs(actualRate - targetSampleRate) < 0.5 else {
+                NSLog("Tap sample rate verification failed: set=%d read=%d requested=%f actual=%f", setStatus, readStatus, targetSampleRate, actualRate)
+                destroy()
+                return false
+            }
         }
 
         return true

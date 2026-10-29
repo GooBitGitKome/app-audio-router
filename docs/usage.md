@@ -91,7 +91,7 @@ Mac 上で鳴っているすべての音（YouTube, BGM, ゲーム音, 効果音
 
 入力デバイスの変更を記録するには、ターミナルで `swift run AppAudioRouterCLI watch-input 300` を実行します。GFNの起動・終了時刻と出力ログを照合してください。CPU負荷が上がった場合は Activity Monitor でプロセス名を確認してください。このコマンドはブラウザ内部のサイト選択や CPU 使用率を読み取るものではありません。
 
-GFN起動中もChatGPT/GeminiのWeb会話にBlackHoleを固定するには、[BrowserExtension/README.md](../BrowserExtension/README.md)の手順でBrave拡張を読み込みます。ChatGPT/Geminiのサイト設定でマイクを許可してからページを再読み込みしてください。会話開始時、開発者ツールのConsoleに `Voice capture pinned to: BlackHole 2ch` と表示されれば固定済みです。BlackHoleが使えない時は既定マイクへ逃がさずエラーを表示します。
+GFN起動中もChatGPT/GeminiのWeb会話にBlackHoleを固定するには、[BrowserExtension/README.md](../BrowserExtension/README.md)の手順でBrave拡張を読み込みます。ChatGPT/Geminiのサイト設定でマイクを許可してからページを再読み込みしてください。会話開始時、開発者ツールのConsoleに `Verified voice input: BlackHole 2ch` と表示されれば固定済みです。BlackHoleが使えない時は既定マイクへ逃がさずエラーを表示します。
 
 ログにはBlackHoleやBluetooth機器の追加・消失、デバイスID、サンプルレート、標準入出力も表示されます。Braveで切り替わった時刻と照合すると、OS標準入力の変更とデバイスの再接続を区別できます。OS側に変更がなければ、Braveの `brave://webrtc-internals` を開いてからGeminiの音声入力を開始し、getUserMediaの制約と選択された音声トラックを確認する必要があります。
 
@@ -101,3 +101,16 @@ GFN起動中もChatGPT/GeminiのWeb会話にBlackHoleを固定するには、[Br
 1. Zoom の「設定」>「オーディオ」を開きます。
 2. **マイク** のプルダウンから **`AppAudioRouter Virtual Microphone`** を選択します。
 3. （推奨）「オリジナルサウンドを有効にする」を ON に設定すると、Zoom 側の強力なノイズキャンセリングによって音楽やデスクトップ音が遮断されるのを防ぐことができます。
+
+## Rust preview: testing sound
+
+Open the current Rust build and click **Audio** in the menu bar. The copy in `/Applications` may be an older Swift build until it is updated; the Rust panel identifies itself as Rust preview.
+
+1. Click **Test desktop route (plays a sound)** for an automatic audible loopback test. It waits for capture to be ready, plays a short sound, records it, and plays back a recording with a detected signal.
+2. For your voice, find **Microphones**, enable **Send microphone to virtual mic**, and speak while clicking **Record enabled sources · 5 seconds**. Start with a microphone whose rate matches the mixer. A disabled Bluetooth route indicates an unsupported rate; use the built-in mic rather than changing the macOS default input.
+3. For both sources, enable desktop routing, play sound in another app, enable the microphone route, and record. Muted or unrouted sources are not included.
+4. Check **Playback → ...** to see where the recording will be heard. System output selection and app exclusions are under **Device settings & app exclusions**. A no-signal result explains what to check instead of automatically playing silence.
+
+These checks do not install or require the Brave extension. The extension only controls microphone selection on supported browser sites.
+
+更新や作り直し後に物理マイクへ戻る場合は、[Brave・GeForce NOWのマイク分離と復旧記録](brave-gfn-microphone-recovery.md)を参照してください。拡張機能本体と使用中のサイトタブの両方を再読み込みし、実際の取得トラックを確認します。

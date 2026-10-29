@@ -125,3 +125,11 @@ app-audio-router/
 
 - **基本方針**: **外部サードパーティライブラリ（CocoaPods、外部 Swift パッケージ等）への依存は原則禁止**とします。
 - **理由**: 低レイヤのオーディオ制御やメニューバー UI は、Apple 公式の SDK（CoreAudio, AudioToolbox, Accelerate, SwiftUI）のみで完結可能であり、外部依存を増やさないことが長期的な保守性とセキュリティの担保に直結するためです。
+
+## Rust migration workflow and dependencies
+
+See [Rust migration](rust-migration.md) for Cargo commands, native packaging, current differences, and hardware acceptance. Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --all-targets --locked` for Rust changes. Keep Swift build/tests during coexistence. Hardware tests are explicit and serial.
+
+The Rust migration is an approved exception to the default no-third-party-library policy: the `objc2` runtime/framework binding family and CLI signal handling through `libc` are allowed. The core DSP crate has no third-party dependencies. Commit Cargo.lock, minimize framework features, and review new runtime dependencies before adding them. A rewrite does not establish a performance improvement; benchmark against the release Swift build.
+
+For a brief native startup/shutdown check, run `AppAudioRouter.app/Contents/MacOS/AppAudioRouterApp --smoke-test` from an interactive macOS host. It initializes the menu bar controls and exits automatically; it does not replace manual UI and permission checks.

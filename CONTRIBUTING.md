@@ -100,3 +100,7 @@ Pull Request を提出する前に、必ず以下のチェックをパスして�
 - **実証主義の徹底**: 必ずローカル環境でビルド、テスト、実機動作を確認した上で PR を作成してください。
 - **Source of Truth の維持**: AI とのチャット履歴を仕様の根拠とせず、必ずリポジトリ内のコード、テスト、公式ドキュメントに事実を反映させてください。
 - 詳細な運用方針は [AI_USAGE.md](AI_USAGE.md) をご参照ください。
+
+## Rust migration checks
+
+During coexistence, retain the Swift checks above and run Cargo formatting, Clippy, and workspace tests for Rust changes. Native audio hardware tests remain opt-in and must run serially with the running app stopped. Follow [the migration guide](docs/rust-migration.md); do not remove Swift or make Rust the packaging default before its acceptance gates pass.

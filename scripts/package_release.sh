@@ -14,6 +14,9 @@ mkdir -p "$STAGING_DIR"
 ditto "$PROJECT_DIR/AppAudioRouter.app" "$STAGING_DIR/AppAudioRouter.app"
 ditto "$PROJECT_DIR/BrowserExtension" "$STAGING_DIR/BrowserExtension"
 cp "$PROJECT_DIR/docs/installation.md" "$STAGING_DIR/INSTALL-ja.md"
+if [ "${AAR_BACKEND:-swift}" = rust ]; then
+    cp "$PROJECT_DIR/docs/rust-migration.md" "$STAGING_DIR/RUST-PREVIEW.md"
+fi
 
 (
   cd "$DIST_DIR"

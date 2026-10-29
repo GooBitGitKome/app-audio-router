@@ -146,3 +146,32 @@
    `CATapDescription` のプロセス除外付きグローバルタップ API は macOS 14.2 以降に限定されています。
 4. **アプリケーション個別音量一覧機能の非表示**:
    過去の仕様ではアプリケーション個別音量リスト（`ProcessRowView`）が存在していましたが、ユーザーの要望によりメニューバー UI からは削除されています（内部 Core ロジックは残存）。
+
+### Capture clock validation
+Tap aggregate creation reads back the nominal sample rate. If it cannot verify the requested rate, creation fails and the aggregate is destroyed. This does not prove effective stream format conversion. Process output changes detach obsolete renderer consumers before attaching the replacement.
+
+## Rust backend preview
+
+[FACT] A parallel Rust 2024 implementation is available through Cargo and opt-in `AAR_BACKEND=rust` packaging. The Swift backend remains the default. The Rust interface uses AppKit rather than SwiftUI and retains the dedicated device UID, bundle identifier, explicit-only default-input changes, and existing exclusion preferences. The browser extension remains JavaScript.
+
+Rust command aliases are preserved. Invalid CLI arguments and unavailable hardware return nonzero status. Global capture fails if self-process exclusion cannot be resolved. Only native Float32 streams are accepted; unmatched effective source/output rates fail explicitly. Software resampling is not implemented. Recordings use the capture stream rate and up to 30 seconds of stereo PCM16 WAV. Rust app test recordings use a process-specific temporary path to avoid colliding with the CLI file.
+
+[UNKNOWN] Hardware audio continuity, permission retention, browser enumeration, Intel/Apple Silicon hardware parity, and performance improvements are not established by compilation or synthetic tests. See [migration status and acceptance gates](rust-migration.md) for remaining UI/behavior differences. Swift removal is gated on those checks.
+
+### Rust self-test and readable controls
+
+The Rust menu bar item displays **Audio** with a template waveform image for light/dark menu bars. Its wider panel uses explicit system text/background colors and larger text, puts test/status controls first, and collapses system-device settings and app exclusions by default. Errors/status wrap near the top instead of being placed below the entire control list. Route updates preserve the current scroll position.
+
+**Test desktop route (plays a sound)** enables the desktop route if needed, requires audible/unmuted desktop gain, starts capture from the active bidirectional loopback device, waits until real input frames arrive, and plays the standard system Ping sound through a separate local player process so mandatory self-exclusion remains intact. It records for five seconds, then plays the recording in-process if a signal was detected. It leaves the desktop route enabled and does not enable a physical microphone or change macOS defaults.
+
+**Record enabled sources** records only the existing desktop/microphone routes. With no enabled sources it reports an actionable error instead of implicitly starting desktop capture. Peak values at or below 0.0001 (-80 dBFS) are reported as no audible signal and are not auto-played. The file remains available for explicit playback. Capture with no input frames fails after a bounded preparation wait. Playback destination is displayed; playback into the active loopback output is rejected with an explanation.
+
+Microphones whose nominal rate differs from the active mixer output are visibly marked and their route button is disabled; no resampling capability is implied. On this host, the built-in microphone matches the loopback rate; Bluetooth compatibility remains device-dependent.
+
+Rust `RecordingJob::ready()` now means an input block arrived. `RecordingJob::poll()` returns a `RecordingReport` (duration and peak) rather than only duration. The synchronous `record()` duration-returning interface is unchanged.
+
+### Browser reconnection guard
+Mic Lock 1.1.0 validates returned track device IDs before delivering streams. Unexpected streams are stopped. Device-change events stop locked tracks if their source disappears or differs. OS/game microphone selection remains independent. Rust UI separation and native reconnection work remain pending.
+
+### Mic Lock ON/OFF
+Version 1.2.0 adds a toolbar popup switch. `chrome.storage.local.enabled` defaults to true and persists locally. An isolated-world settings bridge applies changes to supported pages. Audio acquisition waits for initial settings. ON pins/verifies virtual input; OFF preserves the original request. A transition stops extension-acquired audio and rejects pending acquisitions with AbortError if their mode changed. Reconnect voice after toggling. Scope remains the existing ChatGPT/Gemini origins; no OS/game input settings change.

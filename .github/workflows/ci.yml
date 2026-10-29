@@ -24,3 +24,24 @@ jobs:
 
       - name: Run Tests
         run: swift test
+
+  rust-build-and-test:
+    name: Rust migration (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Unit and synthetic callback tests
+        run: cargo test --workspace --all-targets --locked
+      - name: Cross-build both supported architectures
+        run: |
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          cargo build --workspace --locked --target x86_64-apple-darwin
+          cargo build --workspace --locked --target aarch64-apple-darwin
+      - name: Browser extension tests
+        run: node --test BrowserExtension/mic-lock.test.cjs

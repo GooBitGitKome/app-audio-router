@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/router-core", "crates/router-macos", "crates/router-cli", "crates/router-app"]
+resolver = "3"
+
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+router-core = { path = "crates/router-core" }
+router-macos = { path = "crates/router-macos" }
+objc2 = "0.6.3"
+objc2-foundation = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-core-audio = { version = "0.3.2", default-features = false, features = ["std", "AudioHardware", "AudioHardwareDeprecated", "objc2", "objc2-core-audio-types", "objc2-foundation"] }
+objc2-core-audio-types = "0.3.2"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAppearance", "NSBitmapImageRep", "NSImageRep", "NSFont", "NSColor", "NSParagraphStyle", "NSApplication", "NSRunningApplication", "NSResponder", "NSView", "NSWindow", "NSWindowController", "NSViewController", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSButtonCell", "NSCell", "NSControl", "NSPopover", "NSScrollView", "NSClipView", "NSScroller", "NSTextField", "NSText", "NSTextFieldCell", "NSSlider", "NSSliderCell", "NSMenu", "NSMenuItem", "NSPopUpButton", "NSPopUpButtonCell", "NSAlert", "NSImage", "NSWorkspace", "objc2-core-foundation"] }
+objc2-avf-audio = "0.3.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
